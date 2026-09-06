@@ -61,7 +61,9 @@ honest about what happened rather than to look tidy:
 | field | why it exists |
 |---|---|
 | `provenance.model.applied` / `.verified` | Requested is not applied. A picker can accept a click and not change, so the model that answered is read back from the UI. For a systematic review this is the audit trail. |
-| `markdown` | `true` means the text is the provider's own markdown. `false` means a scraped-DOM fallback, where tables arrive tab-separated and LaTeX is gone. |
+| `extraction` | Which tier produced the text: `copy` (the provider's own markdown), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
+| `markdown` | `true` for either markdown tier. |
+| `lossy_math` | `true` when maths was rendered but its source is not in the DOM, so the formula is glyphs rather than LaTeX. Never passed off as source. |
 | `tables`, `code_blocks` | Parsed from that markdown, so a pipeline gets rows and source instead of a string to re-parse. |
 | `files` | Files the provider *generated*, downloaded to `downloads/`, with small text payloads inlined. |
 | `browsed`, `sources` | What the UI actually did. Providers routinely answer from their weights despite being told to search. |
@@ -121,9 +123,15 @@ like something else when they fail:
   `data-latex`, so rendered maths cannot be recovered from the DOM at all.
   The message *Copy* button returns canonical markdown. Compare:
   `t ^ 2 = C Q−(k−1)` against `$\hat{\tau}^2 = \frac{Q-(k-1)}{C}$`.
-- **The clipboard is one buffer for the whole machine.** Two tabs copying at
-  once read each other's answer, which looks exactly like the model replying
-  to the wrong prompt. Hence a process-wide mutex.
+- **The clipboard is one buffer for the whole machine**, and it can fail on
+  its own. Two tabs copying at once read each other's answer (hence a
+  process-wide mutex); it needs a *focused* document, so a pooled background
+  tab must be fronted; and Windows can stop serving clipboard requests
+  entirely — observed here, with every write reporting success, every read
+  returning empty, and PowerShell's own `Get-Clipboard` failing at the same
+  moment. That is why extraction has three tiers rather than two: a
+  clipboard outage must not silently turn every table into tab-separated
+  text.
 - **A generated file is not a link.** There is no `<a download>` and no
   `blob:` href anywhere. The bytes sit behind *Open*, which opens a viewer
   overlay whose toolbar is `div[role=button]` — so
@@ -148,6 +156,10 @@ like something else when they fail:
 - **A provider renders its own failures as an ordinary message.** "Sorry,
   something went wrong" arrives as a short, valid-looking answer. Unchecked,
   it puts a plausible non-answer into a batch of results.
+- **The active model's menu option is `aria-disabled`.** Clicking it can
+  never succeed, so a picker label read too early (before it rendered) leads
+  straight into a 10s click timeout trying to select the model that was
+  already selected.
 - **A rendered composer does not mean signed in.** An anonymous session shows
   one too, and every request then runs against no account.
 - **`sources-list` is in every response**, so it cannot be the browsing

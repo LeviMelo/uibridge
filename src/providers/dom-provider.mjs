@@ -26,6 +26,7 @@ import {
   isGenerating,
   readRenderedText,
 } from '../transports/dom.mjs'
+import { reconstructMarkdown } from '../transports/markdown-dom.mjs'
 
 const cdpSessions = new WeakMap()
 async function cdp(page) {
@@ -119,9 +120,24 @@ export class DomProvider extends Provider {
    * The picker's own label, which is the only readable state on a 'combined'
    * picker - it reports the model and whether extended thinking is on.
    */
-  async pickerLabel(page) {
+  async pickerLabel(page, { wait = 5000 } = {}) {
     const s = this.sel
-    if (!s.modelPicker || !(await count(page, s.modelPicker))) return null
+    if (!s.modelPicker) return null
+    // Wait briefly: count() does not auto-wait, and reading it too early
+    // returns nothing for a picker that is merely a few frames late. An empty
+    // label then looks like "the wrong model is selected", so we open the
+    // menu and try to click the option that is ALREADY active - which the UI
+    // marks aria-disabled, so the click can never succeed and the request
+    // dies on a 10s click timeout.
+    try {
+      await waitFor(async () => (await count(page, s.modelPicker)) || null, {
+        timeout: wait,
+        poll: this.settings.pollMs,
+        what: 'the model picker',
+      })
+    } catch {
+      return null
+    }
     const el = page.locator(s.modelPicker).first()
     const aria = await el.getAttribute('aria-label').catch(() => null)
     if (aria) return aria
@@ -153,6 +169,20 @@ export class DomProvider extends Provider {
     if (!(await option.count().catch(() => 0))) {
       await page.keyboard.press('Escape').catch(() => {})
       return { requested: modelId, applied: before || null, verified: false, note: 'option not in menu' }
+    }
+
+    // A DISABLED option is the one already in use: Gemini marks the active
+    // model aria-disabled. Clicking it is impossible, so treat it as
+    // confirmation rather than spending a click timeout failing.
+    if ((await option.getAttribute('aria-disabled').catch(() => null)) === 'true') {
+      await page.keyboard.press('Escape').catch(() => {})
+      const label = await this.pickerLabel(page)
+      return {
+        requested: modelId,
+        applied: label ?? before ?? null,
+        verified: true,
+        note: 'already active (option disabled)',
+      }
     }
     await option.click({ timeout: 10000 })
 
@@ -190,6 +220,12 @@ export class DomProvider extends Provider {
     if (!(await item.count().catch(() => 0))) {
       await page.keyboard.press('Escape').catch(() => {})
       return { mode, applied: null, verified: false, note: 'toggle not in menu' }
+    }
+    if ((await item.getAttribute('aria-disabled').catch(() => null)) === 'true') {
+      // Unavailable for the current model (extended thinking is not offered
+      // on every one), so report it rather than failing on a dead click.
+      await page.keyboard.press('Escape').catch(() => {})
+      return { mode, applied: null, verified: false, note: 'toggle disabled for this model' }
     }
     await item.click({ timeout: 10000 })
 
@@ -386,7 +422,13 @@ export class DomProvider extends Provider {
         timeout: cfg.responseTimeoutMs,
         poll: cfg.pollMs,
         what: 'the answer to finish',
-        accept: (t) => !!t && !transient.some((re) => re.test(t)),
+        // A placeholder IS the whole content at that moment ("Searching the
+        // internet", "Thinking"), so only treat SHORT text as one. Matching
+        // these words anywhere rejects a real answer forever: with extended
+        // thinking on, the response block carries its own "Show thinking"
+        // control, so every read looked transient and the request sat until
+        // the 600s timeout even though the answer was complete on screen.
+        accept: (t) => !!t && !(t.trim().length <= 64 && transient.some((re) => re.test(t))),
       }
     )
 
@@ -410,9 +452,44 @@ export class DomProvider extends Provider {
     const s = this.sel
     const cfg = this.settings
 
+    // THREE TIERS, best first. The reason there are three is that the best
+    // one depends on the system clipboard, which can fail on its own: on this
+    // machine every clipboard write reported success while every read came
+    // back empty, and PowerShell's Get-Clipboard failed at the same moment.
+    // With innerText as the only fallback, such an outage silently turns
+    // every table into tab-separated text - plausible-looking and wrong.
+    //   copy         the provider's own canonical markdown
+    //   dom-markdown rebuilt from the elements: tables, fences, lists survive
+    //   rendered     innerText, structure lost - last resort
     const rendered = await readRenderedText(page, { blocks: s.responseBlocks, text: s.responseText }, ctx.index)
-    const copied = await copyMarkdown(page, s, { expectLen: rendered.length, pollMs: cfg.pollMs, log: this.log })
-    const text = copied ?? rendered
+    const copied = await copyMarkdown(page, s, {
+      expectLen: rendered.length,
+      rendered,
+      pollMs: cfg.pollMs,
+      log: this.log,
+    })
+
+    let text = copied
+    let extraction = 'copy'
+    let lossyMath = false
+    if (!text) {
+      const rebuilt = await reconstructMarkdown(
+        page,
+        { blocks: s.responseBlocks, text: s.responseText },
+        ctx.index
+      )
+      if (rebuilt?.text) {
+        text = rebuilt.text
+        extraction = 'dom-markdown'
+        lossyMath = rebuilt.lossyMath
+        this.log?.warn('clipboard unavailable; rebuilt markdown from the DOM (maths may be lossy)')
+      }
+    }
+    if (!text) {
+      text = rendered
+      extraction = 'rendered'
+      this.log?.warn('falling back to innerText - table and code structure is lost')
+    }
 
     // A provider's OWN failure arrives as an ordinary assistant message
     // ("Sorry, something went wrong. Please try your request again.") and is
@@ -440,7 +517,12 @@ export class DomProvider extends Provider {
 
     return {
       text,
-      markdown: !!copied,
+      // Which tier produced this, so a caller can judge the text rather than
+      // guess. `markdown` stays for compatibility: true when the text is
+      // real markdown, whichever tier built it.
+      extraction,
+      markdown: extraction !== 'rendered',
+      lossy_math: lossyMath,
       tables: parseTables(text),
       code_blocks: parseCodeBlocks(text),
       files,

@@ -70,6 +70,30 @@ export class Session {
   }
 
   /**
+   * Can the page reach the system clipboard?
+   *
+   * Worth checking explicitly: it is a machine-global resource, it can fail
+   * independently of this code, and when it does the copy path degrades
+   * silently to a lower extraction tier.
+   */
+  async clipboardHealthy() {
+    return this.#pool.withTab(async (page) => {
+      await this.#provider.open(page)
+      const token = `uibridge-${Date.now()}`
+      return page
+        .evaluate(async (t) => {
+          try {
+            await navigator.clipboard.writeText(t)
+            return (await navigator.clipboard.readText()) === t
+          } catch {
+            return false
+          }
+        }, token)
+        .catch(() => false)
+    })
+  }
+
+  /**
    * Run one prompt.
    *
    * Attachments are validated BEFORE a tab is taken: a typo in a path used to
@@ -123,7 +147,7 @@ export class Session {
 
       log.info(
         `${result.text.length} chars in ${((Date.now() - tSubmit) / 1000).toFixed(1)}s ` +
-          `(${result.markdown ? 'markdown' : 'rendered-text fallback'}` +
+          `(${result.extraction ?? (result.markdown ? 'markdown' : 'rendered')}` +
           `${result.files.length ? `, ${result.files.length} file(s)` : ''}` +
           `${result.sources.length ? `, ${result.sources.length} source(s)` : ''})`
       )

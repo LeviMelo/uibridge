@@ -79,20 +79,31 @@ def t_markdown_not_innertext():
     t = r["text"]
     check("text extracted as markdown, not innerText",
           r["markdown"] and "|" in t,
-          f"markdown={r['markdown']} pipes={t.count('|')} chars={len(t)}")
+          f"via={r['extraction']} pipes={t.count('|')} chars={len(t)}")
 
 
 def t_latex_source_survives():
-    """KaTeX drops the LaTeX source from the DOM - no annotation, no data-latex.
+    """LaTeX is only recoverable through the provider's own copy path.
 
-    Rendered maths is therefore unrecoverable by scraping the DOM; the copy
-    path is the only way the source comes back. This is what proves it.
+    KaTeX keeps no <annotation> and no data-latex, so rendered maths has no
+    source in the DOM at all. That makes this check conditional on HOW the
+    text was extracted - and the point is that the bridge must never present
+    garbled glyphs as if they were LaTeX:
+
+      extraction == "copy"  -> real LaTeX commands must be present
+      otherwise             -> the answer MUST be flagged lossy_math, and we
+                               assert the flag, not the formula
     """
     r = call("Give the DerSimonian-Laird between-study variance estimator in LaTeX.",
              model=MODEL, modes=NO_THINK)
     t = r["text"]
-    has_tex = any(m in t for m in ("\\frac", "\\tau", "\\sum", "$"))
-    check("LaTeX source recovered, not rendered glyphs", has_tex, repr(t[:90]))
+    if r["extraction"] == "copy":
+        has_tex = any(m in t for m in (r"\frac", r"\tau", r"\sum", r"\hat"))
+        check("LaTeX source recovered via the copy path", has_tex, repr(t[:90]))
+    else:
+        check("maths correctly flagged as lossy when copy was unavailable",
+              r["lossy_math"] is True,
+              f"extraction={r['extraction']} lossy_math={r['lossy_math']}")
 
 
 def t_table_parses_to_rows():

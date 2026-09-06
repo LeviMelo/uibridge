@@ -150,6 +150,22 @@ test('waitStable: rejects a placeholder even when stable', async () => {
   )
 })
 
+test('waitStable: a long answer that merely mentions a placeholder word is accepted', async () => {
+  // With extended thinking on, the response block carries its own "Show
+  // thinking" control, so a substring match on placeholder words rejected a
+  // finished answer forever and the request sat until its 600s timeout.
+  // Only SHORT text can be a placeholder.
+  const answer = 'Show thinking. ' + 'The pooled estimate favours the intervention. '.repeat(6)
+  const short = (t) => t.trim().length <= 64 && /thinking|searching/i.test(t)
+  const v = await waitStable(async () => answer, {
+    checks: 2,
+    timeout: 2000,
+    poll: 5,
+    accept: (t) => !!t && !short(t),
+  })
+  assert.equal(v, answer)
+})
+
 test('flattenMessages: labels non-user roles instead of dropping them', () => {
   const out = flattenMessages([
     { role: 'system', content: 'Be terse.' },

@@ -118,6 +118,14 @@ async function doctor(only) {
       console.log(`  session   : ${signedIn ? 'signed in' : `SIGNED OUT - run: uibridge login ${id}`}`)
       if (!signedIn) bad++
 
+      // The clipboard is a machine-global resource that can fail on its own,
+      // and when it does, extraction quietly drops to a lower tier. Better to
+      // see that here than to wonder later why tables lost their structure.
+      const clip = await session.clipboardHealthy()
+      console.log(
+        `  clipboard : ${clip ? 'working (copy path available)' : 'UNAVAILABLE - extraction will use the DOM fallback'}`
+      )
+
       const caps = session.capabilities
       console.log(`  models    : ${Object.keys(caps.models).join(', ') || '(none declared)'}`)
       console.log(`  modes     : ${Object.keys(caps.modes).join(', ') || '(none)'}`)
@@ -143,7 +151,8 @@ async function ask(id, prompt) {
     const r = await session.ask({ prompt })
     console.log(`\n${r.text}\n`)
     console.log(
-      `--- ${r.elapsed_ms}ms | ${r.markdown ? 'markdown' : 'rendered-text fallback'}` +
+      `--- ${r.elapsed_ms}ms | via ${r.extraction}` +
+        (r.lossy_math ? ' | maths lossy (no LaTeX in the DOM)' : '') +
         ` | tables:${r.tables.length} code:${r.code_blocks.length}` +
         ` files:${r.files.length} browsed:${r.browsed} sources:${r.sources.length}`
     )

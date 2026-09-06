@@ -121,7 +121,12 @@ export async function captureExchange(cfg, id, promptArg) {
   log.info('capturing DOM')
 
   const rendered = await readRenderedText(page, { blocks: sel.responseBlocks, text: sel.responseText }, index)
-  const copied = await copyMarkdown(page, sel, { expectLen: rendered.length, pollMs: settings.pollMs, log })
+  const copied = await copyMarkdown(page, sel, {
+    expectLen: rendered.length,
+    rendered,
+    pollMs: settings.pollMs,
+    log,
+  })
 
   const dom = await page.evaluate(
     ({ blockSel }) => {

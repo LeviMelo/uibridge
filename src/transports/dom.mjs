@@ -17,7 +17,9 @@
 // 2. THE CLIPBOARD IS ONE SHARED BUFFER for the whole machine. Two tabs
 //    copying at once read each other's answer, which under concurrency looks
 //    exactly like the model replying to the wrong prompt. Hence the mutex,
-//    and hence a length sanity-check against what is on screen.
+//    and hence an identity check against what is on screen. It also requires
+//    a FOCUSED document, so a pooled background tab must be fronted first or
+//    the read simply fails and extraction silently degrades.
 //
 // 3. A "GENERATED FILE" IS NOT A LINK. There is no <a download> and no blob:
 //    href anywhere in the response, so searching for download affordances
@@ -76,16 +78,46 @@ export async function readRenderedText(page, { blocks, text }, index) {
 }
 
 /**
+ * Is `copied` the same response as what is rendered on screen?
+ *
+ * Compared on letters and digits only, because the two forms differ by
+ * design: markdown carries pipes, fences and LaTeX that the rendered text
+ * does not. Several fragments are sampled rather than one, since the copy may
+ * omit a reasoning trace that the rendered block includes (or vice versa) -
+ * one shared fragment is enough to establish identity.
+ */
+function sharesContent(copied, rendered) {
+  const squash = (s) => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const a = squash(copied)
+  const b = squash(rendered)
+  if (!a || !b) return false
+  if (a.length < 24) return b.includes(a) || a.includes(b)
+  for (const at of [0.15, 0.4, 0.65, 0.85]) {
+    const start = Math.floor(a.length * at)
+    const frag = a.slice(start, start + 24)
+    if (frag.length === 24 && b.includes(frag)) return true
+  }
+  return false
+}
+
+/**
  * Canonical markdown via the message Copy button.
  *
- * `expectLen` is the on-screen length: a copy far shorter than that means we
- * read a stale clipboard (or another tab's), so we reject it and let the
- * caller fall back rather than return someone else's text.
+ * `rendered` is what is on screen, used to confirm the clipboard really holds
+ * THIS response and not a stale or foreign one. On mismatch we return null so
+ * the caller falls back, rather than returning another tab's text.
  */
-export async function copyMarkdown(page, { copyButton }, { expectLen = 0, pollMs = 150, log } = {}) {
+export async function copyMarkdown(page, { copyButton }, { expectLen = 0, rendered = '', pollMs = 150, log } = {}) {
   if (!copyButton) return null
   return clipboard.run(async () => {
     try {
+      // navigator.clipboard.readText() REQUIRES a focused document. A pooled
+      // tab sitting in the background is not focused, so the read rejects,
+      // and extraction quietly falls back to lossy rendered text - tables
+      // tab-separated, LaTeX gone. It looks like nothing went wrong.
+      // Fronting the tab is safe here because the mutex already serialises
+      // this section, so two tabs never fight over focus or the buffer.
+      await page.bringToFront().catch(() => {})
       await page.locator(copyButton).last().click({ timeout: 5000 })
       const text = await waitFor(
         async () => {
@@ -95,8 +127,18 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, pollMs
         { timeout: 2500, poll: pollMs, what: 'clipboard to fill' }
       )
       const clean = normalizeNewlines(text)
-      if (expectLen && clean.length < expectLen * 0.5) {
-        log?.warn(`clipboard returned ${text.length} chars for a ${expectLen}-char response; using rendered text`)
+      // The clipboard is shared, so we must be sure this is OUR response and
+      // not another tab's. Length alone is the wrong test: with extended
+      // thinking the rendered block also contains the whole reasoning trace,
+      // so the real answer is legitimately a fraction of it and a ratio check
+      // rejected perfectly good markdown - silently downgrading every such
+      // request to the lossy path. Identity, not size: if a distinctive
+      // fragment of the copy appears in what is on screen, it is ours.
+      if (expectLen && !sharesContent(clean, rendered)) {
+        log?.warn(
+          `clipboard content does not match the response on screen ` +
+            `(${clean.length} vs ${expectLen} chars); using rendered text`
+        )
         return null
       }
       return clean

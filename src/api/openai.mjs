@@ -79,9 +79,16 @@ export function completionResponse({ modelId, result, provider }) {
       // applied, and for a systematic review the difference is the audit
       // trail - it belongs in a methods section.
       provenance: result.provenance,
-      // Is `text` the provider's own markdown, or scraped rendered text? With
-      // the fallback, tables arrive tab-separated and LaTeX is lost.
+      // WHICH extraction tier produced the text:
+      //   copy         the provider's own canonical markdown (best)
+      //   dom-markdown rebuilt from elements - tables/fences/lists intact,
+      //                used when the system clipboard is unavailable
+      //   rendered     innerText, structure lost (last resort)
+      extraction: result.extraction ?? 'copy',
       markdown: result.markdown,
+      // True when maths was rendered but its source is not in the DOM, so the
+      // formula is glyphs rather than LaTeX. Never silently pretended.
+      lossy_math: result.lossy_math ?? false,
       tables: result.tables,
       code_blocks: result.code_blocks,
       // Files the PROVIDER generated, already on disk.

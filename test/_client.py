@@ -85,6 +85,11 @@ def call(prompt, model="gemini", attachments=None, modes=None, timeout=900):
         # False means scraped rendered text, where pipe tables arrive
         # tab-separated and LaTeX is lost to KaTeX rendering.
         "markdown": ub.get("markdown", False),
+        # Which tier produced the text: "copy" (the provider's own markdown),
+        # "dom-markdown" (rebuilt from elements when the system clipboard is
+        # unavailable), or "rendered" (innerText, structure lost).
+        "extraction": ub.get("extraction"),
+        "lossy_math": ub.get("lossy_math", False),
         "tables": ub.get("tables") or [],
         "code_blocks": ub.get("code_blocks") or [],
         # Files the PROVIDER generated, already downloaded to disk.
