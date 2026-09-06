@@ -411,23 +411,43 @@ test('wire: citation markers are removed whole, not just their sentinels', () =>
 })
 
 test('wire: a cited source keeps its position in the CLEAN text', () => {
-  const marker = PUA200 + 'cite' + PUA202 + 'turn0search1' + PUA201
+  // The shape taken from the recording. Sources are NOT on the answer
+  // message - they arrive on the tool/reasoning channels as
+  // search_result_groups, and the inline marker names one by ref_id.
+  // Reading only the answer's own content_references reported "the server
+  // withheld the sources" while the UI was showing them under
+  // "Visualizar fontes".
+  const marker = PUA200 + 'cite' + PUA202 + 'turn638403search2' + PUA201
+  const group = {
+    search_result_groups: [
+      {
+        type: 'search_result_group',
+        domain: 'pubmed.ncbi.nlm.nih.gov',
+        entries: [
+          {
+            type: 'search_result',
+            url: 'https://pubmed.ncbi.nlm.nih.gov/41420428/',
+            title: 'Effect of Dexmedetomidine',
+            attribution: 'pubmed.ncbi.nlm.nih.gov',
+            ref_id: { turn_index: 638403, ref_type: 'search', ref_index: 2 },
+          },
+        ],
+      },
+    ],
+  }
   const raw = sse([
-    {
-      data: JSON.stringify({
-        p: '', o: 'add', c: 0,
-        v: JSON.parse(msg('assistant', 'text', ['n = 60 ' + marker], {
-          content_references: [{ matched_text: marker, url: 'https://pubmed.example/1', title: 'Trial' }],
-        })),
-      }),
-    },
+    { data: JSON.stringify({ p: '', o: 'add', c: 0, v: JSON.parse(msg('tool', 'text', ['results'], group)) }) },
+    { data: JSON.stringify({ c: 1, v: JSON.parse(msg('assistant', 'text', ['n = 60 ' + marker])) }) },
   ])
   const r = decodeDeltaStream(raw)
   assert.equal(r.text, 'n = 60 ')
   assert.equal(r.citations.length, 1)
   // Offsets into the raw text would point past the end once stripped.
   assert.equal(r.citations[0].at, 7)
-  assert.equal(r.citations[0].url, 'https://pubmed.example/1')
+  assert.equal(r.citations[0].url, 'https://pubmed.ncbi.nlm.nih.gov/41420428/')
+  assert.equal(r.unresolved_markers, 0)
+  // Everything the turn looked at is reported too, cited or not.
+  assert.equal(r.sources.length, 1)
 })
 
 test('wire: a marker whose source was withheld is counted, not forgotten', () => {

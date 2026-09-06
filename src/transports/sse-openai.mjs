@@ -93,6 +93,10 @@ export function decodeDeltaStream(raw) {
     finished: false,
     frames: 0,
     malformed: 0,
+    // Everything the turn looked at, whether or not the answer cited it.
+    sources: [],
+    // Markers pointing at a source the stream never delivered.
+    unresolved_markers: 0,
   }
 
   const apply = (d) => {
@@ -193,26 +197,74 @@ export function decodeDeltaStream(raw) {
     // stripped.
     const { text, marks } = stripMarkers(best.text)
     out.text = text
-    const refs = best.m.metadata?.content_references ?? []
-    out.citations = refs
-      .map((r) => {
-        const url = r?.url ?? r?.safe_urls?.[0] ?? r?.refs?.[0]?.url ?? null
-        if (!url || r.invalid) return null
-        const at = marks.find((mk) => mk.matched === r.matched_text)
-        return {
-          at: at ? at.index : null,
-          title: r.title ?? r.alt ?? null,
-          url,
+
+    // SOURCES LIVE ON THE OTHER CHANNELS. The final text message carries
+    // content_references that are routinely marked invalid with no URL, and
+    // reading only those produced a confident, WRONG report that the sources
+    // had been withheld - while the answer on screen was showing them under
+    // "Visualizar fontes". The real list is in metadata.search_result_groups
+    // on the tool and reasoning channels, which is why this scans the whole
+    // turn instead of one message.
+    const byKey = new Map()
+    for (const ch of channels.values()) {
+      for (const entry of collectSearchEntries(ch)) {
+        if (!entry.url) continue
+        const key = refKey(entry.ref_id)
+        const rec = {
+          url: entry.url,
+          title: entry.title ?? null,
+          site: entry.attribution ?? null,
+          snippet: entry.snippet || null,
         }
-      })
-      .filter(Boolean)
-    // Markers whose reference was withheld (the server marks them invalid
-    // with no URL) are counted rather than silently forgotten: the answer
-    // claimed a source that was not delivered, and a caller weighing the text
-    // deserves to know that happened.
-    out.unresolved_markers = marks.length - out.citations.length
+        if (key && !byKey.has(key)) byKey.set(key, rec)
+        if (!out.sources.some((x) => x.url === rec.url)) out.sources.push(rec)
+      }
+    }
+
+    // An inline marker names its source exactly: "turn638403search2" is
+    // {turn_index: 638403, ref_type: search, ref_index: 2}. So a claim can be
+    // tied to the source that supports it, at the character where it was
+    // made - which is the whole point for a systematic review.
+    for (const mk of marks) {
+      const key = markerKey(mk.matched)
+      const hit = key ? byKey.get(key) : null
+      if (hit) out.citations.push({ at: mk.index, ...hit })
+      else out.unresolved_markers++
+    }
   }
   return out
+}
+
+/** Every search result anywhere in a message, at any depth. */
+function collectSearchEntries(node, out = []) {
+  if (!node || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const v of node) collectSearchEntries(v, out)
+    return out
+  }
+  if (Array.isArray(node.search_result_groups)) {
+    for (const g of node.search_result_groups) {
+      for (const e of g?.entries ?? []) out.push(e)
+    }
+  }
+  for (const v of Object.values(node)) collectSearchEntries(v, out)
+  return out
+}
+
+/** "turn638403search2" - the key both an entry and a marker resolve to. */
+function refKey(refId) {
+  if (!refId || typeof refId !== 'object') return null
+  const { turn_index: t, ref_type: type, ref_index: i } = refId
+  if (t == null || !type || i == null) return null
+  return `turn${t}${type}${i}`
+}
+
+function markerKey(matched) {
+  // The span is <PUA200>cite<PUA202>turn638403search2<PUA201>; the middle
+  // segment is the key.
+  const parts = matched.replace(PUA, String.fromCharCode(31)).split(String.fromCharCode(31))
+  const inner = parts.filter(Boolean).pop() ?? ''
+  return /^turn\d+[a-z]+\d+$/.test(inner) ? inner : null
 }
 
 /**
