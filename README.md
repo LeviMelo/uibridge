@@ -48,7 +48,7 @@ node bin/uibridge.mjs login <provider>      # sign in; you type the password, ne
 node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
 node bin/uibridge.mjs ask gemini "..."      # one prompt, no server
 node bin/uibridge.mjs capture gemini ["p"]  # record DOM + network for calibration
-npm test                                    # 24 unit tests, no browser, ~0.5s
+npm test                                    # 25 unit tests, no browser, ~0.5s
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -60,7 +60,8 @@ honest about what happened rather than to look tidy:
 
 | field | why it exists |
 |---|---|
-| `provenance.model.applied` / `.verified` | Requested is not applied. A picker can accept a click and not change, so the model that answered is read back from the UI. For a systematic review this is the audit trail. |
+| `provenance.model.applied` / `.verified` | Requested is not applied. Gemini genuinely drops model switches (its own bug), so the selection is retried and then read back from the UI. `verified: false` means the UI is on something else — `applied` names what. For a systematic review this is the audit trail; set `strictModel: true` in config to make a mismatch an error instead. |
+| `provenance.final_state` | The picker label read *after* model and modes were both applied. The per-step labels are stale by then. |
 | `extraction` | Which tier produced the text: `copy` (the provider's own markdown), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
 | `markdown` | `true` for either markdown tier. |
 | `lossy_math` | `true` when maths was rendered but its source is not in the DOM, so the formula is glyphs rather than LaTeX. Never passed off as source. |
@@ -184,6 +185,30 @@ So extraction is a *transport* rather than something baked in, and
 `uibridge capture` records DOM and network side by side and reports whether
 any payload actually contains the answer. When a provider's stream is
 readable, a wire transport slots in without touching anything else.
+
+## Status
+
+Live suite, run against Gemini with the system clipboard broken — so the
+`dom-markdown` tier was doing the work throughout:
+
+```
+17/18   markdown extraction (28 pipes), maths correctly flagged lossy,
+        table parsed to rows, python fence with language,
+        generated CSV retrieved to disk (436 bytes, real header),
+        csv / pdf / both uploads registered,
+        thinking toggle verified in the picker,
+        citations reported truthfully (no sources claimed when none shown),
+        6 concurrent tabs isolated, 0 leakage, 4.3x speedup,
+        bad attachment rejected in 0.02s, empty messages 400, unknown model 200
+```
+
+The one failure was Gemini refusing a model switch (`gemini-pro` requested,
+UI stayed on Flash-Lite). That is Gemini's bug; the bridge reported it
+correctly rather than attributing the answer to Pro. It is now retried, and
+`strictModel` can turn it into an error.
+
+ChatGPT is next, and it is a calibration job: `uibridge capture chatgpt`,
+fill in its `selectors.json`, set `calibrated: true`.
 
 ## Notes
 
