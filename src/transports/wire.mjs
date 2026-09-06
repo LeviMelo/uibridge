@@ -37,6 +37,7 @@ export class WireTap {
   #client
   #watchers = new Set()
   #requests = new Map()
+  #recent = []
 
   /** One tap per tab, attached lazily and kept for the tab's lifetime. */
   static async attach(page) {
@@ -71,6 +72,26 @@ export class WireTap {
     })
 
     client.on('Network.requestWillBeSent', (e) => {
+      // A REDIRECT REUSES THE REQUEST ID. Chrome re-fires this event with a
+      // redirectResponse, and treating it as a new request loses the
+      // watchers attached to the original: the capture then waits forever
+      // for a response that already arrived under a URL it stopped
+      // following. Keep the record, move it to the new URL.
+      const prior = this.#requests.get(e.requestId)
+      if (e.redirectResponse && prior) {
+        prior.redirects = (prior.redirects ?? 0) + 1
+        prior.url = e.request.url
+        prior.chunks = []
+        return
+      }
+      // Path only: a signed download URL carries a credential in its query,
+      // and this list is written to logs.
+      try {
+        this.#recent.push(new URL(e.request.url).pathname)
+        if (this.#recent.length > 40) this.#recent.shift()
+      } catch {
+        /* not a parseable URL; nothing to record */
+      }
       const rec = {
         id: e.requestId,
         url: e.request.url,
@@ -112,6 +133,15 @@ export class WireTap {
       if (!rec) return
       rec.status = e.response.status
       rec.mime = e.response.mimeType
+      // AN ALLOWLIST, not the header bag. Response headers can carry
+      // set-cookie and other credentials, and a snapshot ends up in logs and
+      // error bodies. Only the three that describe the payload are kept -
+      // content-disposition is how a generated file learns its real name.
+      const h = e.response.headers ?? {}
+      rec.headers = {}
+      for (const [k, v] of Object.entries(h)) {
+        if (/^content-(type|disposition|length)$/i.test(k)) rec.headers[k.toLowerCase()] = v
+      }
       try {
         const s = await client.send('Network.streamResourceContent', { requestId: e.requestId })
         if (s.bufferedData) rec.chunks.push(Buffer.from(s.bufferedData, 'base64'))
@@ -130,12 +160,19 @@ export class WireTap {
     const finish = async (requestId, error) => {
       const rec = this.#requests.get(requestId)
       if (!rec) return
-      if (rec.unstreamed && !error) {
+      // ASK FOR THE BODY IF STREAMING GAVE US NOTHING. A subscription can
+      // succeed and still deliver no data events - measured on the file
+      // download endpoints, which answered 200 with the right
+      // content-disposition and zero bytes in the stream, so a real CSV
+      // arrived as an empty file. Emptiness, not the subscription's return
+      // value, is the condition worth testing.
+      const empty = !rec.chunks.length || !Buffer.concat(rec.chunks).length
+      if (empty && !error) {
         try {
           const got = await client.send('Network.getResponseBody', { requestId })
           rec.chunks = [Buffer.from(got.body, got.base64Encoded ? 'base64' : 'utf8')]
         } catch {
-          /* nothing retained */
+          /* nothing retained; the caller sees zero bytes and says so */
         }
       }
       rec.done = true
@@ -145,6 +182,16 @@ export class WireTap {
     }
     client.on('Network.loadingFinished', (e) => finish(e.requestId, null))
     client.on('Network.loadingFailed', (e) => finish(e.requestId, e.errorText || 'loading failed'))
+  }
+
+  /**
+   * The paths of recent requests, for when a capture times out.
+   *
+   * "Nothing matched" is not a diagnosis; "here is what the page did ask
+   * for" is. Paths only - a signed URL's query string is a credential.
+   */
+  seen() {
+    return [...this.#recent]
   }
 
   /**
@@ -171,12 +218,19 @@ export class WireTap {
 
 /** Plain data about one captured response. */
 function snapshot(rec) {
-  const body = Buffer.concat(rec.chunks).toString('utf8')
+  // BYTES FIRST. Chunks are joined as buffers and decoded once: decoding
+  // each chunk would corrupt any multibyte character split across a chunk
+  // boundary, and `buffer` is the only honest form for a generated .xlsx or
+  // .pdf, where a utf8 round-trip destroys the payload.
+  const buffer = Buffer.concat(rec.chunks)
+  const body = buffer.toString('utf8')
   return {
     url: rec.url,
     method: rec.method,
     status: rec.status,
     mime: rec.mime,
+    headers: rec.headers ?? {},
+    buffer,
     ok: rec.status != null && rec.status >= 200 && rec.status < 300 && !rec.error,
     error: rec.error,
     done: rec.done,

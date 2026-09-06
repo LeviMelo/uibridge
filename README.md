@@ -50,7 +50,7 @@ node bin/uibridge.mjs ask chatgpt "..."     # one prompt, no server
 node bin/uibridge.mjs ask chatgpt --file=paper.pdf --model=chatgpt-5.6-high "..."
 node bin/uibridge.mjs doctor chatgpt --anon # prove signed-OUT is detected (throwaway profile)
 node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabulary + network
-npm test                                    # 49 unit tests, no browser, ~1s
+npm test                                    # 60 unit tests, no browser, ~1s
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -184,6 +184,24 @@ like something else when they fail:
 - **`.contains-extensions-response`** marks responses where the provider's
   code/file tool ran. Gating file lookup on it means ordinary answers pay
   nothing.
+- **A click can be accepted and ignored.** Playwright reporting a successful
+  click is not evidence the app handled it: during the re-render after a
+  modal closes, the first click reaches a node with no handler yet. Four
+  download runs were blamed on the file endpoints before the truth showed up
+  in a list of the page's actual requests. Success is now judged by the page
+  *issuing the request*, and the click repeated until it does.
+- **Layout panels intercept clicks.** A link at the bottom of a thread sits
+  under the sticky composer, and `data-side-pane-shell-host` covers the
+  message area, so a coordinate click lands on the wrong element. The target
+  is centred first and, if still covered, the click is dispatched on the
+  element itself.
+- **A rate-limit modal reappears.** While the lock is active every
+  conversations poll returns 429 and raises the notice again, so dismissing
+  it once per request is a race. It is dismissed immediately before each
+  click that matters.
+- **Downloads may never touch the download manager.** With Chrome's download
+  behaviour set to a directory: zero download events, empty directory. The
+  bytes existed only in the response the page received.
 
 ### Why not read the network instead of the DOM?
 
@@ -240,7 +258,15 @@ and get the model's own markdown back with the server's model slug in
 `provenance.answered_by`, its sources, and each citation tied to the
 character offset it supports. The UI is only used to type, click and set the
 picker; nothing is scraped, so translations and class names cannot break
-extraction. Files ChatGPT itself generates are not retrieved yet.
+extraction.
+
+**Files ChatGPT generates come back too.** Its Python environment is the
+reliable one, so this is how a table of extracted data leaves the chat: ask
+for a CSV or an xlsx, and the bytes land in `downloads/` named by the
+server, byte-exact. Chrome never writes the file itself - the page fetches
+it and keeps it in memory - so the bridge keeps the response the page
+received. Code-interpreter files only; canvas documents and generated
+images use other endpoints and are not retrieved yet.
 
 ## Notes
 

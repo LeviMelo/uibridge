@@ -18,7 +18,7 @@ import { resolve as resolvePath } from 'node:path'
 import { Provider, Capabilities } from './contract.mjs'
 import { BridgeError, ChallengeError, ContractError, SignedOutError, TimeoutError } from '../core/errors.mjs'
 import { sessionState, signedOutMessage } from '../core/auth.mjs'
-import { waitFor, waitStable } from '../core/async.mjs'
+import { sleep, waitFor, waitStable } from '../core/async.mjs'
 import { parseCodeBlocks, parseTables } from '../core/markdown.mjs'
 import {
   copyMarkdown,
@@ -51,7 +51,7 @@ export class DomProvider extends Provider {
       models: s.models ?? {},
       modes: s.modes ?? {},
       attachments: !!s.dropTarget || !!s.fileInput,
-      generatedFiles: !!s.generatedFile?.chip,
+      generatedFiles: !!(s.generatedFile?.chip || s.generatedFile?.scheme),
       citations: !!s.sourceChip || !!s.wire?.answer,
       // A provider whose answer is readable off the network declares it in
       // selectors.json under `wire`; the DOM stays as the fallback.
@@ -115,22 +115,99 @@ export class DomProvider extends Provider {
   }
 
   /**
-   * The site's own "you are going too fast" notice, if it is showing.
+   * Dismiss the site's own blocking notices, and say which ones were there.
    *
-   * On ChatGPT this is a per-user safety lock ("Limitamos temporariamente o
-   * acesso às suas conversas para proteger seus dados"): new chats still
-   * work, history is locked for a few minutes. So it is returned as a fact
-   * for the caller, not raised - raising would turn a working request into
-   * a failure, and calling it "signed out" or "UI changed" would send
-   * someone debugging the wrong thing.
+   * THIS IS NOT COSMETIC. ChatGPT's rate-limit modal sits in a `fixed
+   * inset-0 z-50` backdrop, so while it is up EVERY click is swallowed:
+   * Playwright reports "subtree intercepts pointer events" and a download
+   * click times out having sent no request at all. Two runs were spent
+   * blaming the download endpoint for that.
+   *
+   * The notice is still REPORTED rather than raised - on ChatGPT it locks
+   * history, not sending, so a request that otherwise worked must not be
+   * turned into a failure. Returns [{ kind, name, text }].
    */
-  async throttleNotice(page) {
-    if (!this.sel.throttleText) return null
-    const body = await page.locator('body').innerText().catch(() => '')
-    const m = body.match(new RegExp(this.sel.throttleText, 'i'))
-    if (!m) return null
-    const line = body.split(String.fromCharCode(10)).find((l) => new RegExp(this.sel.throttleText, 'i').test(l)) ?? m[0]
-    return line.trim().slice(0, 200)
+  async dismissNotices(page) {
+    const specs = this.sel.notices ?? []
+    const found = []
+    for (const spec of specs) {
+      const re = new RegExp(spec.match, 'i')
+      const dialog = page.locator(spec.dialog ?? "[role='dialog']").filter({ hasText: re }).first()
+      if (!(await dialog.count().catch(() => 0))) continue
+      const text = ((await dialog.innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 240)
+      found.push({ kind: spec.kind ?? 'notice', name: spec.name ?? 'notice', text })
+
+      let closed = false
+      if (spec.dismiss) {
+        const btn = dialog.locator(spec.dismiss).filter(spec.dismissText ? { hasText: new RegExp(spec.dismissText, 'i') } : {}).first()
+        if (await btn.count().catch(() => 0)) {
+          await btn.click({ timeout: 5000 }).catch(() => {})
+          closed = true
+        }
+      }
+      // Escape is the fallback, not the first choice: a modal that ignores it
+      // would otherwise look dismissed and keep eating clicks.
+      if (!closed) await page.keyboard.press('Escape').catch(() => {})
+      const gone = await waitFor(async () => ((await dialog.count().catch(() => 0)) ? null : true), {
+        timeout: 5000,
+        poll: this.settings.pollMs,
+        what: `the "${spec.name}" notice to close`,
+      }).catch(() => false)
+      this.log?.warn(
+        `the site showed its "${spec.name}" notice${gone ? ' (dismissed)' : ' AND IT WOULD NOT CLOSE - clicks may be blocked'}: ${text}`
+      )
+    }
+    return found
+  }
+
+  /**
+   * Click something that a reappearing modal keeps covering.
+   *
+   * THE MODAL COMES BACK. While the rate-limit lock is active the app keeps
+   * polling its conversations endpoint, every poll returns 429, and every
+   * 429 raises the notice again - so dismissing it once and then clicking is
+   * a race that loses about as often as it wins. Measured the hard way: two
+   * download runs reported "the site never answered" when the truth was that
+   * the click never landed.
+   *
+   * So: dismiss, click, and if the click is intercepted, dismiss and try
+   * again. The error thrown on the last attempt is the real one, not a
+   * timeout with the cause hidden.
+   */
+  async clickThrough(locator, { attempts = 3, timeout = 6000, what = 'a control' } = {}) {
+    const page = locator.page()
+    let last = null
+    for (let i = 1; i <= attempts; i++) {
+      const dismissed = await this.dismissNotices(page).catch(() => [])
+      // Closing a modal re-renders the page underneath it. Clicking into
+      // that re-render is how a click gets accepted and then ignored, so
+      // give it a moment - but only when something was actually closed.
+      if (dismissed.length) await sleep(600)
+      // CENTRE IT FIRST. "Scrolled into view" is not the same as clickable:
+      // a link at the bottom of a thread ends up under the sticky composer,
+      // and a coordinate click then lands on the composer instead.
+      await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest' })).catch(() => {})
+
+      try {
+        if (i === 1) {
+          await locator.click({ timeout })
+        } else {
+          // A real click is preferred, but it is impossible while something
+          // transparent sits on top - the app's own layout panels do exactly
+          // that ("data-side-pane-shell-host ... intercepts pointer events").
+          // Dispatching on the element reaches the handler regardless of what
+          // is painted above it.
+          await locator.evaluate((el) => el.click())
+          this.log?.debug(`clicked ${what} on the element itself, because something is covering it`)
+        }
+        return
+      } catch (e) {
+        last = e
+        const covered = /intercepts pointer events|not stable|element is not visible/i.test(e.message)
+        this.log?.debug(`click on ${what} failed (attempt ${i})${covered ? ' - something is covering it' : ''}`)
+      }
+    }
+    throw last
   }
 
   async assertNoChallenge(page) {
@@ -445,7 +522,9 @@ export class DomProvider extends Provider {
     const fire = async () => {
       if (s.submitKey) return composer.press(s.submitKey)
       await this.requireContract(page, 'sendButton', s.sendButton)
-      await page.locator(s.sendButton).first().click({ timeout: 15000 })
+      // Through any blocking notice: the rate-limit modal covers the
+      // composer too, and a swallowed send presents as "no turn appeared".
+      await this.clickThrough(page.locator(s.sendButton).first(), { timeout: 15000, what: 'the send button' })
     }
 
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -603,7 +682,7 @@ export class DomProvider extends Provider {
     const s = this.sel
     const cfg = this.settings
 
-    if (ctx.wireResult?.decoded?.text) return this.#extractWire(ctx)
+    if (ctx.wireResult?.decoded?.text) return this.#extractWire(page, ctx)
 
     // THREE TIERS, best first. The reason there are three is that the best
     // one depends on the system clipboard, which can fail on its own: on this
@@ -658,14 +737,7 @@ export class DomProvider extends Provider {
       this.log?.warn(`the UI answered with its own error message: "${text.trim().slice(0, 90)}"`)
     }
 
-    const files = s.generatedFile
-      ? await downloadGeneratedFiles(page, s.generatedFile, {
-          dir: cfg.downloadDir,
-          waitMs: cfg.fileWaitMs,
-          pollMs: cfg.pollMs,
-          log: this.log,
-        })
-      : []
+    const files = await this.generatedFiles(page, ctx, text)
 
     const { browsed, searched, sources } = await this.collectSources(page, ctx)
 
@@ -690,10 +762,30 @@ export class DomProvider extends Provider {
   }
 
   /**
+   * Files the PROVIDER generated, downloaded to disk.
+   *
+   * A hook, because the two providers expose them in genuinely different
+   * ways: Gemini behind a viewer overlay in the DOM, ChatGPT as a link the
+   * page fetches with its own credentials. Default is the DOM path; a
+   * provider whose files are readable on the network overrides it.
+   */
+  async generatedFiles(page, ctx, _text) {
+    const s = this.sel
+    const cfg = this.settings
+    if (!s.generatedFile?.chip) return []
+    return downloadGeneratedFiles(page, s.generatedFile, {
+      dir: cfg.downloadDir,
+      waitMs: cfg.fileWaitMs,
+      pollMs: cfg.pollMs,
+      log: this.log,
+    })
+  }
+
+  /**
    * The answer as the server sent it. No clipboard, no DOM, no guessing
    * which tier produced the text: this IS the model's markdown.
    */
-  #extractWire(ctx) {
+  async #extractWire(page, ctx) {
     const s = this.sel
     const { res, decoded } = ctx.wireResult
     const text = decoded.text
@@ -707,7 +799,7 @@ export class DomProvider extends Provider {
       provider_error: providerError,
       tables: parseTables(text),
       code_blocks: parseCodeBlocks(text),
-      files: [],
+      files: await this.generatedFiles(page, ctx, text),
       // Sources are everything the turn consulted; citations are the ones
       // the answer actually leans on, each with the offset in `text` where
       // the claim is made.

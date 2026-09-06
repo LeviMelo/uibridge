@@ -332,6 +332,27 @@ def t_chatgpt_wire_answer():
           f"HTTP {status} via {ub.get('extraction')} by {ub.get('provenance', {}).get('answered_by')}")
 
 
+def t_chatgpt_generated_file():
+    """A file ChatGPT's Python environment wrote comes back on disk.
+
+    This is the path that matters for extraction work: the model builds a
+    CSV, the page fetches it with its own credentials, and the bridge keeps
+    the bytes the page received. Chrome writes no file of its own, so the
+    assertion is on OUR directory.
+    """
+    status, body = raw_post({"model": "chatgpt-5.6-instant",
+                             "messages": [{"role": "user",
+                                           "content": "Using Python, write a CSV named live_check.csv with "
+                                                      "columns pmid,drug,n and exactly three made-up rows, then "
+                                                      "give me the download link. One short sentence."}]},
+                            timeout=400)
+    files = body.get("_uibridge", {}).get("files") or []
+    got = next((f for f in files if not f.get("error")), None)
+    ok = status == 200 and got and Path(got["path"]).exists() and Path(got["path"]).read_text().count(",") >= 6
+    check("chatgpt generated file retrieved to disk", bool(ok),
+          f"HTTP {status}: {[f.get('name') or f.get('error') for f in files]}")
+
+
 def t_chatgpt_pdf_attachment():
     """A PDF reaches ChatGPT: the upload is confirmed on the wire before sending."""
     status, body = raw_post({"model": "chatgpt-5.6-instant",
@@ -352,7 +373,7 @@ TESTS = [
     t_sources_from_menu, t_no_false_browsing,
     t_tab_isolation, t_missing_file_fails_fast, t_empty_messages,
     t_unknown_model_falls_back, t_models_endpoint,
-    t_chatgpt_wire_answer, t_chatgpt_pdf_attachment,
+    t_chatgpt_wire_answer, t_chatgpt_pdf_attachment, t_chatgpt_generated_file,
 ]
 
 

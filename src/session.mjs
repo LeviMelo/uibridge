@@ -166,12 +166,12 @@ export class Session {
       if (session.state !== 'in') throw new SignedOutError(this.id, signedOutMessage(this.id, session))
       if (this.#settings.newChatPerRequest) await provider.newConversation(page)
 
-      // A rate-limit notice is a fact to carry, not a reason to stop: on
-      // ChatGPT new chats still answer while it shows. It is logged and
-      // returned so a batch can slow down, and so that nobody reads the
-      // symptom as a login or selector problem.
-      const throttled = await provider.throttleNotice?.(page).catch(() => null)
-      if (throttled) log.warn(`the site is rate-limiting this account: "${throttled}" - continuing, but slow down`)
+      // A blocking notice is a fact to carry, not a reason to stop: on
+      // ChatGPT the rate-limit modal locks history, not sending. But it must
+      // be CLOSED, because its backdrop swallows every click - including the
+      // one that downloads a generated file.
+      const notices = (await provider.dismissNotices?.(page).catch(() => [])) ?? []
+      const throttled = notices.find((n) => n.kind === 'rate_limit')?.text ?? null
 
       // Model and modes first: on some providers they cannot be changed once
       // a thread has started, and provenance must describe the turn we send.
@@ -246,7 +246,14 @@ export class Session {
           `${result.sources.length ? `, ${result.sources.length} source(s)` : ''})`
       )
 
-      return { ...result, provenance, throttle_notice: throttled ?? null, request_id: rid, elapsed_ms: Date.now() - started }
+      return {
+        ...result,
+        provenance,
+        throttle_notice: throttled ?? null,
+        notices,
+        request_id: rid,
+        elapsed_ms: Date.now() - started,
+      }
     })
   }
 

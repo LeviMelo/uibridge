@@ -19,6 +19,10 @@ import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
 import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse-openai.mjs'
 import { WireTap } from '../src/transports/wire.mjs'
 import { Pacer } from '../src/core/async.mjs'
+import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const NL = String.fromCharCode(10)
 const lines = (...l) => l.join(NL)
@@ -505,6 +509,10 @@ function fakeCDP() {
       sent.push({ method, params })
       if (method === 'Network.streamResourceContent') return { bufferedData: '' }
       if (method === 'Network.getRequestPostData') return { postData: '{"model":"gpt-5-6-thinking"}' }
+      if (method === 'Network.getResponseBody') {
+        if (client.bodyFor) return client.bodyFor
+        throw new Error('no body retained')
+      }
       return {}
     },
     emit: (ev, e) => handlers.get(ev)?.(e),
@@ -621,4 +629,185 @@ test('pacer: an interval of 0 never waits', async () => {
   const p = new Pacer(0)
   const waited = await Promise.all([p.wait(), p.wait(), p.wait()])
   assert.deepEqual(waited, [0, 0, 0])
+})
+
+// --- generated files off the wire ---------------------------------------------
+// The download path is: the answer names a sandbox link, the page fetches it
+// with its own credentials, we keep the bytes. These cover the parts that
+// are ours: parsing, naming, and not corrupting the payload.
+
+test('files: sandbox links come from the answer text, de-duplicated', () => {
+  const text = 'Done: [download trials.csv](sandbox:/mnt/data/trials.csv) and ' +
+    '[the workbook](sandbox:/mnt/data/out.xlsx). Again: [x](sandbox:/mnt/data/trials.csv)'
+  const links = parseSchemeLinks(text, 'sandbox')
+  assert.deepEqual(links.map((l) => l.path), ['/mnt/data/trials.csv', '/mnt/data/out.xlsx'])
+  assert.equal(links[0].label, 'download trials.csv')
+  assert.deepEqual(parseSchemeLinks('no files here'), [])
+})
+
+test('files: the UTF-8 filename form wins over the plain one', () => {
+  assert.equal(
+    filenameFromDisposition(`attachment; filename="analise.csv"; filename*=UTF-8''an%C3%A1lise.csv`),
+    'análise.csv'
+  )
+  assert.equal(filenameFromDisposition(`attachment; filename="trials.csv"`), 'trials.csv')
+  assert.equal(filenameFromDisposition(null), null)
+})
+
+test('files: a model-chosen name cannot escape the download directory', () => {
+  // The FILENAME IS UNTRUSTED INPUT: the model writes it, and it lands on a
+  // write path. This is the check that keeps a generated file from being
+  // written over a profile's cookie jar.
+  assert.equal(safeFileName('../../.profiles/gemini/Cookies'), 'Cookies')
+  assert.equal(safeFileName('/etc/passwd'), 'passwd')
+  assert.equal(safeFileName('..'), 'download.bin')
+  // and it must not mangle ordinary names
+  assert.equal(safeFileName('trials_demo1.csv'), 'trials_demo1.csv')
+  assert.equal(safeFileName('análise 2026.xlsx'), 'análise 2026.xlsx')
+  // reserved device names and control characters
+  assert.equal(safeFileName('NUL.csv'), '_NUL.csv')
+  assert.equal(safeFileName('a' + String.fromCharCode(0) + 'b.csv'), 'ab.csv')
+  assert.ok(safeFileName('x'.repeat(300) + '.csv').length <= 180)
+})
+
+test('files: a downloaded file keeps its exact bytes and is named by the server', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const dir = mkdtempSync(join(tmpdir(), 'uibridge-files-'))
+  // A payload with NUL and high bytes: a utf8 round-trip would destroy it,
+  // which is exactly what an .xlsx or a .png is.
+  const payload = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff, 0xfe, 0x0a, 0x00, 0x41])
+
+  const done = captureDownload(tap, async () => {
+    cdp.emit('Network.requestWillBeSent', { requestId: 'm', request: { url: 'https://x/backend-api/conversation/c/interpreter/download?message_id=1', method: 'GET' } })
+    cdp.emit('Network.requestWillBeSent', { requestId: 'c', request: { url: 'https://x/backend-api/estuary/content?id=file_1', method: 'GET' } })
+    cdp.emit('Network.responseReceived', { requestId: 'm', response: { status: 200, mimeType: 'application/json', headers: {} } })
+    cdp.emit('Network.responseReceived', { requestId: 'c', response: { status: 200, mimeType: 'application/zip', headers: { 'content-disposition': 'attachment; filename="ignored.bin"', 'set-cookie': 'session=SECRET' } } })
+    await new Promise((r) => setImmediate(r))
+    cdp.emit('Network.dataReceived', { requestId: 'm', data: Buffer.from(JSON.stringify({ file_name: 'out.xlsx', mime_type: 'application/vnd.ms-excel' })).toString('base64') })
+    cdp.emit('Network.loadingFinished', { requestId: 'm' })
+    cdp.emit('Network.dataReceived', { requestId: 'c', data: payload.toString('base64') })
+    cdp.emit('Network.loadingFinished', { requestId: 'c' })
+  }, { contentPattern: /estuary\/content/, metaPattern: /interpreter\/download/, dir, timeoutMs: 2000 })
+
+  const got = await done
+  assert.equal(got.name, 'out.xlsx', 'the metadata JSON names the file')
+  assert.equal(got.mime, 'application/vnd.ms-excel')
+  assert.deepEqual(readFileSync(got.path), payload, 'bytes must survive exactly')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('files: response headers are kept to a payload allowlist, never credentials', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/estuary/)
+  cdp.emit('Network.requestWillBeSent', { requestId: 'h', request: { url: 'https://x/estuary/content', method: 'GET' } })
+  cdp.emit('Network.responseReceived', {
+    requestId: 'h',
+    response: { status: 200, mimeType: 'text/csv', headers: { 'content-type': 'text/csv', 'content-disposition': 'attachment; filename="a.csv"', 'set-cookie': 'session=SECRET', authorization: 'Bearer SECRET' } },
+  })
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.loadingFinished', { requestId: 'h' })
+  const res = await cap.finished(1000)
+  assert.deepEqual(Object.keys(res.headers).sort(), ['content-disposition', 'content-type'])
+  assert.ok(!JSON.stringify(res.headers).includes('SECRET'))
+})
+
+test('files: a refused download reports the status instead of writing a stub', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const dir = mkdtempSync(join(tmpdir(), 'uibridge-files-'))
+  const done = captureDownload(tap, async () => {
+    cdp.emit('Network.requestWillBeSent', { requestId: 'e', request: { url: 'https://x/backend-api/estuary/content', method: 'GET' } })
+    cdp.emit('Network.responseReceived', { requestId: 'e', response: { status: 403, mimeType: 'application/json', headers: {} } })
+    await new Promise((r) => setImmediate(r))
+    cdp.emit('Network.loadingFinished', { requestId: 'e' })
+  }, { contentPattern: /estuary\/content/, dir, timeoutMs: 2000 })
+  await assert.rejects(done, /HTTP 403/)
+  assert.equal(readdirSync(dir).length, 0, 'nothing may be written for a failed download')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('wire tap: an empty stream falls back to asking for the body', async () => {
+  // Measured on the file endpoints: the subscription succeeds and then
+  // delivers no data events, so the bytes have to be requested explicitly.
+  // Without this the download wrote a 0-byte "CSV".
+  const cdp = fakeCDP()
+  cdp.bodyFor = { body: Buffer.from('pmid,drug,n').toString('base64'), base64Encoded: true }
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/estuary/)
+  cdp.emit('Network.requestWillBeSent', { requestId: 'z', request: { url: 'https://x/estuary/content', method: 'GET' } })
+  cdp.emit('Network.responseReceived', { requestId: 'z', response: { status: 200, mimeType: 'text/csv', headers: {} } })
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.loadingFinished', { requestId: 'z' })
+  const res = await cap.finished(1000)
+  assert.equal(res.body, 'pmid,drug,n')
+  assert.equal(res.bytes, 11)
+})
+
+test('wire tap: a redirected request still completes for its capture', async () => {
+  // A redirect REUSES the request id. Treating the second requestWillBeSent
+  // as a new request orphans the capture, which then waits out its whole
+  // timeout for a response that already arrived.
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/estuary\/content/)
+  cdp.emit('Network.requestWillBeSent', { requestId: 'r1', request: { url: 'https://x/backend-api/estuary/content?id=1', method: 'GET' } })
+  cdp.emit('Network.requestWillBeSent', {
+    requestId: 'r1',
+    request: { url: 'https://cdn.example/signed/blob', method: 'GET' },
+    redirectResponse: { status: 302, url: 'https://x/backend-api/estuary/content?id=1' },
+  })
+  cdp.emit('Network.responseReceived', { requestId: 'r1', response: { status: 200, mimeType: 'text/csv', headers: { 'content-type': 'text/csv' } } })
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.dataReceived', { requestId: 'r1', data: Buffer.from('a,b').toString('base64') })
+  cdp.emit('Network.loadingFinished', { requestId: 'r1' })
+  const res = await cap.finished(1000)
+  assert.equal(res.body, 'a,b')
+  assert.equal(res.url, 'https://cdn.example/signed/blob', 'the record follows the redirect target')
+})
+
+test('wire tap: recent paths are reported without their signed query strings', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  tap.expect(/nothing/)
+  cdp.emit('Network.requestWillBeSent', { requestId: 's', request: { url: 'https://x/backend-api/estuary/content?sig=SECRETSIGNATURE', method: 'GET' } })
+  const seen = tap.seen()
+  assert.deepEqual(seen, ['/backend-api/estuary/content'])
+  assert.ok(!seen.join(' ').includes('SECRET'))
+})
+
+test('files: a swallowed click is retried until the page actually fetches', async () => {
+  // A click Playwright calls successful can still be ignored by the app.
+  // What counts is the request going out, so the trigger is repeated until
+  // it does - otherwise a generated file is reported missing when the only
+  // problem was one lost click.
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const dir = mkdtempSync(join(tmpdir(), 'uibridge-retry-'))
+  let clicks = 0
+  const got = await captureDownload(tap, async () => {
+    clicks++
+    if (clicks < 2) return // the first click does nothing at all
+    cdp.emit('Network.requestWillBeSent', { requestId: 'k', request: { url: 'https://x/backend-api/estuary/content', method: 'GET' } })
+    cdp.emit('Network.responseReceived', { requestId: 'k', response: { status: 200, mimeType: 'text/csv', headers: { 'content-disposition': 'attachment; filename="late.csv"' } } })
+    await new Promise((r) => setImmediate(r))
+    cdp.emit('Network.dataReceived', { requestId: 'k', data: Buffer.from('pmid,n').toString('base64') })
+    cdp.emit('Network.loadingFinished', { requestId: 'k' })
+  }, { contentPattern: /estuary\/content/, dir, timeoutMs: 2000, ackMs: 300 })
+  assert.equal(clicks, 2, 'the trigger must be repeated when no request appears')
+  assert.equal(got.name, 'late.csv')
+  assert.equal(readFileSync(got.path, 'utf8'), 'pmid,n')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('files: clicks that never produce a request fail with that as the reason', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const dir = mkdtempSync(join(tmpdir(), 'uibridge-noreq-'))
+  await assert.rejects(
+    captureDownload(tap, async () => {}, { contentPattern: /estuary/, dir, timeoutMs: 500, ackMs: 150, attempts: 2 }),
+    /produced no request/
+  )
+  rmSync(dir, { recursive: true, force: true })
 })

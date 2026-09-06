@@ -30,6 +30,8 @@ import { fileURLToPath } from 'node:url'
 import { DomProvider } from '../dom-provider.mjs'
 import { BridgeError } from '../../core/errors.mjs'
 import { waitFor } from '../../core/async.mjs'
+import { WireTap } from '../../transports/wire.mjs'
+import { captureDownload, parseSchemeLinks } from '../../transports/files-wire.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -56,6 +58,94 @@ export default class ChatGPTProvider extends DomProvider {
       )
     }
     return super.open(page)
+  }
+
+  // --- generated files -----------------------------------------------------
+
+  /**
+   * Files the code interpreter produced, saved from the wire.
+   *
+   * WHAT WAS MEASURED (2026-09-06, one real exchange):
+   *   the answer says     "[download trials_demo.csv](sandbox:/mnt/data/trials_demo.csv)"
+   *   clicking that       GET /backend-api/conversation/<id>/interpreter/download
+   *                           ?message_id=..&sandbox_path=/mnt/data/trials_demo.csv
+   *                       -> {"download_url": ".../estuary/content?..", "file_name",
+   *                           "mime_type", "metadata":{"file_id"}}
+   *   then                GET /backend-api/estuary/content?..  -> the bytes,
+   *                       content-disposition: attachment; filename="trials_demo.csv"
+   *
+   * The bytes are read from the response THE PAGE receives. Calling those
+   * endpoints ourselves is not an option and was not left as a guess: both
+   * an in-page fetch with cookies and Playwright's request context return
+   * 401 "Access token is missing", because the app signs them with a bearer
+   * token in its own JavaScript. Lifting that token out of the session is
+   * exactly what this project does not do.
+   *
+   * A file that cannot be retrieved is REPORTED, not dropped: the entry
+   * carries an `error` instead of a path, because a pipeline silently one
+   * CSV short is worse than one that fails loudly.
+   */
+  async generatedFiles(page, ctx, text) {
+    const g = this.sel.generatedFile
+    if (!g?.scheme) return []
+    const links = parseSchemeLinks(text, g.scheme)
+    if (!links.length) return []
+
+    const tap = await WireTap.attach(page)
+    const turn = page.locator(this.sel.responseBlocks).last()
+    const controls = turn.locator(g.control)
+
+    // WAIT FOR THE CONTROL BEFORE READING ANYTHING OFF IT. The answer text
+    // arrives on the wire before the turn has finished rendering, so an
+    // immediate read returns an empty list - which then looks exactly like
+    // "this provider stopped rendering download links" and hides a real
+    // file behind a made-up diagnosis.
+    await controls.first().waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+    this.log?.debug(`${links.length} file link(s) in the answer, ${await controls.count().catch(() => 0)} download control(s) rendered`)
+    // Match by label rather than building a CSS selector out of model-written
+    // text: a filename containing a quote or a bracket would break the
+    // selector, not the code.
+    const labels = await controls
+      .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? (e.textContent ?? '').trim()))
+      .catch(() => [])
+
+    const out = []
+    const taken = new Set()
+    for (let i = 0; i < links.length; i++) {
+      const link = links[i]
+      const fallbackName = link.path.split('/').pop() || 'download.bin'
+      const at = labels.findIndex((l) => l && (l === link.label || l.includes(fallbackName)))
+      const index = at >= 0 ? at : i
+      if (index >= labels.length) {
+        this.log?.warn(`${fallbackName}: the answer links it but no download control was rendered`)
+        out.push({ name: fallbackName, error: 'no download control was rendered for this link', source: 'wire' })
+        continue
+      }
+      const control = controls.nth(index)
+      try {
+        out.push(
+          await captureDownload(tap, () => this.clickThrough(control, { attempts: 2, timeout: 4000, what: `the ${fallbackName} download link` }), {
+            contentPattern: g.contentPattern,
+            metaPattern: g.metadataPattern,
+            dir: this.settings.downloadDir,
+            timeoutMs: this.settings.fileWaitMs,
+            fallbackName,
+            taken,
+            log: this.log,
+          })
+        )
+      } catch (e) {
+        // Name what the page DID request. "Nothing matched" is not a
+        // diagnosis, and guessing from it is how two runs got blamed on the
+        // wrong component.
+        this.log?.warn(
+          `${fallbackName}: could not retrieve the file - ${e.message.split('\n')[0]}` +
+            `; the page's recent requests were: ${tap.seen().slice(-8).join(', ')}`
+        )
+        out.push({ name: fallbackName, error: e.message.split('\n')[0], source: 'wire' })
+      }
+    }
+    return out
   }
 
   // --- the picker ----------------------------------------------------------

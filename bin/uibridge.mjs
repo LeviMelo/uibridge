@@ -301,6 +301,10 @@ async function ask(id, args) {
     if (p.final_state) console.log(`--- picker after setup: ${p.final_state}`)
     if (p.model) console.log(`--- model: requested ${p.model.requested}, ${p.model.verified ? 'verified' : 'NOT verified'} (${p.model.note})`)
     for (const c of r.citations ?? []) console.log(`    @${c.at}  ${c.url}`)
+    for (const f of r.files ?? []) {
+      console.log(f.error ? `    FILE FAILED ${f.name}: ${f.error}` : `    file ${f.name}  ${f.bytes ?? '?'} bytes  ${f.mime ?? ''}  -> ${f.path}`)
+    }
+    if (r.throttle_notice) console.log(`--- the site is rate-limiting: ${r.throttle_notice}`)
   } finally {
     await session.close()
   }
