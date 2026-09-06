@@ -220,17 +220,36 @@ export class Session {
 
       // A resumed long thread hydrates asynchronously. Taking the baseline
       // while it still has zero responses makes the first old block look
-      // like the new answer. Wait for existing history, then for its visible
-      // window to settle before submitting.
+      // like the new answer, so we wait for history before submitting.
+      //
+      // BUT WAITING IS NOT A PRECONDITION FOR SENDING. Measured on ChatGPT:
+      // under the rate-limit lock the site keeps accepting new messages while
+      // it stops serving previous conversations - exactly the state in which
+      // this wait cannot succeed. Treating it as fatal attached the user's
+      // file to the composer and then abandoned the turn unsent. On a
+      // wire-reading provider the answer never came from these blocks
+      // anyway; on a DOM one the baseline is merely less certain. So: try,
+      // then send regardless, and say in the provenance which it was.
       if (requestedThread) {
-        await waitFor(async () => (await provider.responseTexts(page)).length || null, {
-          timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
-          what: 'the existing thread history to load',
-        })
-        await waitStable(async () => JSON.stringify(await provider.responseTexts(page)), {
-          checks: 3, timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
-          what: 'the existing thread history to settle', accept: (value) => value !== '[]',
-        })
+        try {
+          await waitFor(async () => (await provider.responseTexts(page)).length || null, {
+            timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
+            what: 'the existing thread history to load',
+          })
+          await waitStable(async () => JSON.stringify(await provider.responseTexts(page)), {
+            checks: 3, timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
+            what: 'the existing thread history to settle', accept: (value) => value !== '[]',
+          })
+          provenance.history = 'loaded'
+        } catch (e) {
+          provenance.history = 'not_loaded'
+          log.warn(
+            `the thread's previous messages did not render (${e.message}). Sending anyway - ` +
+              (provider.wired
+                ? 'the answer is read off the wire, so the baseline is not needed'
+                : 'the answer is identified against a baseline that may be incomplete')
+          )
+        }
       }
 
       const ctx = {

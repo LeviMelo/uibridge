@@ -56,7 +56,28 @@
   "newChatButton": "a[data-testid='create-new-chat-button']",
   "thread": {
     "urlPattern": "/c/([^/?#]+)",
-    "urlTemplate": "/c/{id}"
+    "urlTemplate": "/c/{id}",
+    "export": {
+      "messageNode": "[data-message-author-role][data-message-id]",
+      "idAttr": "data-message-id",
+      "roleAttr": "data-message-author-role",
+      "modelAttr": "data-message-model-slug",
+      "attachmentNode": "div.overflow-hidden > div.truncate.font-semibold"
+    },
+    "_export": [
+      "MEASURED 2026-09-06 on a live thread: every message renders as a node",
+      "carrying data-message-author-role and a STABLE data-message-id (a uuid),",
+      "and assistant nodes also carry data-message-model-slug. Those ids are what",
+      "makes de-duplication across a virtualized scroll trustworthy.",
+      "There is no history JSON to read instead: loading the native /c/<uuid> URL",
+      "sends POST /backend-api/f/conversation/prepare whose response is only",
+      "{status, conduit_token}; the messages arrive over the app's own runtime.",
+      "/backend-api/conversation/<id>/textdocs returned an empty array.",
+      "MEASURED 2026-09-06: a SENT file renders inside the message node itself",
+      "as a card whose name sits in div.overflow-hidden > div.truncate.font-semibold.",
+      "Note ChatGPT renames repeats server-side (_attach_probe(3).md), so the",
+      "exported name is what the THREAD shows, not what was on disk."
+    ]
   },
   "models": {
     "chatgpt-5.6-instant": {

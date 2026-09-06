@@ -36,7 +36,36 @@
   "newChatButton": "button[aria-label*='New chat' i], button[aria-label*='Nova conversa' i], a[aria-label*='New chat' i]",
   "thread": {
     "urlPattern": "/app/([^/?#]+)",
-    "urlTemplate": "/app/{id}"
+    "urlTemplate": "/app/{id}",
+    "export": {
+      "messageNode": "user-query, model-response",
+      "roleMap": {
+        "user-query": "user",
+        "model-response": "assistant"
+      },
+      "idAttr": "id",
+      "idNode": "message-content[id]",
+      "pairId": "next",
+      "textNode": ".query-text, message-content",
+      "textExclude": ".cdk-visually-hidden, .screen-reader-user-query-label",
+      "attachmentNode": ".file-preview-container [aria-label], uploader-file-preview"
+    },
+    "_export": [
+      "MEASURED 2026-09-06 on a live thread. Gemini has no data-message-id: a",
+      "turn is a pair of custom elements, <user-query> and <model-response>, so",
+      "the ROLE is the element itself (roleMap) rather than an attribute.",
+      "Identity comes from the reply: <message-content id=",
+      "'message-content-id-r_819b2d8a8c2a7808'> inside model-response. The user's",
+      "question carries no id of its own, so it borrows its reply's (pairId:",
+      "next) - stable across virtualization, and unlike hashing its text it does",
+      "not merge two identical questions into one.",
+      "The same r_... key also appears in response-container's jslog",
+      "BardVeMetadataKey, which is where to look if the id attribute ever moves.",
+      "The user's message contains an h5.cdk-visually-hidden reading 'You said',",
+      "so reading innerText on the container returned every question twice:",
+      "'You said X' + X. textExclude prunes it (on a clone - the live page is the",
+      "user's). The real text lives in .query-text > p.query-text-line."
+    ]
   },
   "modelPicker": "button[aria-label*='mode picker' i], button[aria-label*='seletor de modo' i], button[aria-label*='mode selector' i], button[aria-label*='model' i]",
   "modelOption": "[role='menuitem']",

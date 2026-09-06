@@ -28,6 +28,7 @@ import {
   readRenderedText,
 } from '../transports/dom.mjs'
 import { reconstructMarkdown } from '../transports/markdown-dom.mjs'
+import { sweepThread } from '../transports/thread-dom.mjs'
 import { WireTap } from '../transports/wire.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
@@ -56,6 +57,9 @@ export class DomProvider extends Provider {
       // A provider whose answer is readable off the network declares it in
       // selectors.json under `wire`; the DOM stays as the fallback.
       transports: s.wire?.answer ? ['wire', 'dom'] : ['dom'],
+      // Whole-thread export needs a MEASURED message-identity contract; a
+      // provider without one says so rather than exporting a fragment.
+      threadExport: !!s.thread?.export?.messageNode,
     })
   }
 
@@ -242,6 +246,24 @@ export class DomProvider extends Provider {
     const url = new URL(spec.urlTemplate.replace('{id}', threadId), this.origin).href
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await page.locator(this.sel.composer).first().waitFor({ state: 'visible', timeout: this.settings.readyTimeoutMs })
+
+    // VERIFY WE ARE STILL IN THE THREAD. Navigating and finding a composer is
+    // not the same as arriving: measured on ChatGPT, a /c/<id> load can land
+    // on a blank new chat, whose composer is equally visible. Without this
+    // check the caller's message was typed into a BRAND NEW conversation -
+    // misattributed, and creating exactly the fresh chats that trip the
+    // site's rate limiter. Better to refuse than to write to the wrong place.
+    const landed = await this.currentThread(page)
+    if (landed !== threadId) {
+      const notices = await this.dismissNotices(page).catch(() => [])
+      const blocked = notices.map((n) => n.text).join(' | ')
+      throw new BridgeError(
+        `${this.id}: thread ${threadId} did not open - the site left us on ` +
+          `${landed ? `thread ${landed}` : 'a new, empty chat'}` +
+          (blocked ? `. It is showing: ${blocked}` : '. Nothing was sent.'),
+        { status: 503, code: 'thread_unavailable', retryable: true, detail: { thread_id: threadId, landed, notices } }
+      )
+    }
   }
 
   async threadIds(page) {
@@ -282,110 +304,71 @@ export class DomProvider extends Provider {
   }
 
   /**
-   * Hydrate and export the active branch of a thread.
+   * Export the active branch of a thread: every message, in order.
    *
-   * Long chat UIs recycle DOM nodes. A single locator snapshot is therefore
-   * not a history. Sweep bottom->top and top->bottom, collecting stable
-   * provider message ids at every viewport; repeat until a whole sweep adds
-   * nothing. `complete` is true only when both scroll boundaries were
-   * physically reached.
+   * The walking, de-duplication and completeness accounting live in
+   * ../transports/thread-dom.mjs and know nothing about any provider. What
+   * belongs here is only the CONTRACT: which node is a message and which of
+   * its attributes carry identity, role and model. That contract is measured
+   * per provider and written in its selectors file, because the previous
+   * version hardcoded ChatGPT's `data-message-id` in this shared class and
+   * would have silently exported nothing on any other provider.
    */
   async exportThread(page, threadId) {
-    const selector = '[data-message-author-role][data-message-id]'
-    await page.locator(selector).first().waitFor({ state: 'attached', timeout: this.settings.readyTimeoutMs })
-    const messages = new Map()
-    const order = []
-    let reachedTop = false
-    let reachedBottom = false
+    const contract = this.sel.thread?.export
+    if (!contract?.messageNode) {
+      throw new BridgeError(
+        `${this.id}: thread export is not calibrated for this provider. ` +
+          'Measure how its messages are identified in the DOM and add thread.export ' +
+          'to its selectors.json - guessing it would export a plausible fragment of a thread.',
+        { status: 501, code: 'not_calibrated' }
+      )
+    }
 
-    const collect = async () => {
-      const rows = await page.locator(selector).evaluateAll((els) => els.map((el) => {
-        const links = [...el.querySelectorAll('a[href]')].map((a) => ({
-          href: a.getAttribute('href'), label: (a.getAttribute('aria-label') || a.textContent || '').trim(),
-        }))
-        const media = [...el.querySelectorAll('img[src], video[src], audio[src]')].map((e) => ({
-          kind: e.tagName.toLowerCase(), src: e.getAttribute('src'), alt: e.getAttribute('alt') || null,
-        }))
-        const fileControls = [...el.querySelectorAll('button, [role="button"]')].map((e) =>
-          (e.getAttribute('aria-label') || e.textContent || '').trim()
-        ).filter((x) => /\.(?:[a-z0-9]{1,12})(?:\s|$)|download|baixar/i.test(x))
-        return {
-          id: el.getAttribute('data-message-id'), role: el.getAttribute('data-message-author-role'),
-          model_slug: el.getAttribute('data-message-model-slug') || null,
-          text: (el.innerText || '').trim(), links, media, file_controls: [...new Set(fileControls)],
+    // A thread whose history never arrives is its OWN failure, not an empty
+    // thread. On ChatGPT the rate-limit lock does exactly this: sending
+    // still works while previous conversations stop being served, and
+    // reporting "0 messages, complete" for that would be a lie the caller
+    // cannot detect.
+    try {
+      await page
+        .locator(contract.messageNode)
+        .first()
+        .waitFor({ state: 'attached', timeout: this.settings.historyTimeoutMs ?? 60000 })
+    } catch {
+      const notices = await this.dismissNotices(page).catch(() => [])
+      const blocked = notices.map((n) => n.text).join(' | ')
+      throw new BridgeError(
+        `${this.id}: the thread's history did not load, so it cannot be exported` +
+          (blocked ? `. The site is showing: ${blocked}` : '. No message ever appeared.'),
+        {
+          status: 503,
+          code: 'thread_history_unavailable',
+          retryable: true,
+          detail: { thread_id: threadId, notices },
         }
-      }))
-      for (const row of rows) if (row.id) messages.set(row.id, row)
-      return rows
+      )
     }
 
-    const scrollState = () => page.locator(selector).first().evaluate((el) => {
-      let node = el.parentElement
-      let best = document.scrollingElement
-      while (node) {
-        const style = getComputedStyle(node)
-        if (node.scrollHeight > node.clientHeight + 8 && /(auto|scroll)/.test(style.overflowY)) { best = node; break }
-        node = node.parentElement
-      }
-      return { top: best.scrollTop, max: Math.max(0, best.scrollHeight - best.clientHeight) }
+    const swept = await sweepThread(page, { fileControl: this.sel.generatedFile?.control, ...contract }, {
+      settleMs: this.settings.threadSettleMs ?? 400,
+      log: this.log,
     })
-    const move = (to) => page.locator(selector).first().evaluate((el, to) => {
-      let node = el.parentElement
-      let best = document.scrollingElement
-      while (node) {
-        const style = getComputedStyle(node)
-        if (node.scrollHeight > node.clientHeight + 8 && /(auto|scroll)/.test(style.overflowY)) { best = node; break }
-        node = node.parentElement
-      }
-      best.scrollTop = to === 'top' ? 0 : best.scrollHeight
-    }, to)
-
-    for (let pass = 0; pass < 4; pass++) {
-      const before = messages.size
-      await move('bottom'); await sleep(500); await collect()
-      reachedBottom = (await scrollState()).top >= (await scrollState()).max - 2
-      let prior = Infinity
-      for (let step = 0; step < 200; step++) {
-        const state = await scrollState()
-        if (state.top <= 1) { reachedTop = true; break }
-        const next = Math.max(0, state.top - Math.max(300, Math.floor((state.max + 1) / 12)))
-        if (next >= prior) break
-        prior = next
-        await page.locator(selector).first().evaluate((el, value) => {
-          let node = el.parentElement; let best = document.scrollingElement
-          while (node) { const s=getComputedStyle(node); if(node.scrollHeight>node.clientHeight+8&&/(auto|scroll)/.test(s.overflowY)){best=node;break} node=node.parentElement }
-          best.scrollTop = value
-        }, next)
-        await sleep(250); await collect()
-      }
-      await move('top'); await sleep(600); await collect(); reachedTop = (await scrollState()).top <= 1
-      await move('bottom'); await sleep(600); await collect(); reachedBottom = (await scrollState()).top >= (await scrollState()).max - 2
-      if (messages.size === before) break
+    if (!swept.complete) {
+      this.log?.warn(
+        `thread export is INCOMPLETE: top=${swept.evidence.reached_top} bottom=${swept.evidence.reached_bottom} ` +
+          `${swept.evidence.message_count} message(s) found - reported as incomplete rather than as the whole thread`
+      )
     }
-
-    // Establish chronological order in a dedicated top->bottom pass. The
-    // Map's insertion order reflects discovery during hydration, not thread
-    // order, and can therefore start at the newest viewport.
-    await move('top'); await sleep(500)
-    for (let step = 0; step < 200; step++) {
-      for (const row of await collect()) if (!order.includes(row.id)) order.push(row.id)
-      const state = await scrollState()
-      if (state.top >= state.max - 2) { reachedBottom = true; break }
-      const next = Math.min(state.max, state.top + Math.max(300, Math.floor((state.max + 1) / 12)))
-      await page.locator(selector).first().evaluate((el, value) => {
-        let node=el.parentElement; let best=document.scrollingElement
-        while(node){const s=getComputedStyle(node);if(node.scrollHeight>node.clientHeight+8&&/(auto|scroll)/.test(s.overflowY)){best=node;break}node=node.parentElement}
-        best.scrollTop=value
-      }, next)
-      await sleep(250)
-    }
-
-    const ordered = [...order.map((id) => messages.get(id)).filter(Boolean), ...[...messages].filter(([id]) => !order.includes(id)).map(([, row]) => row)]
     return {
-      provider: this.id, thread_id: threadId, url: page.url(), exported_at: new Date().toISOString(),
-      branch: 'active', complete: reachedTop && reachedBottom,
-      evidence: { reached_top: reachedTop, reached_bottom: reachedBottom, stable_message_ids: true, message_count: ordered.length },
-      messages: ordered,
+      provider: this.id,
+      thread_id: threadId,
+      url: page.url(),
+      exported_at: new Date().toISOString(),
+      branch: 'active',
+      complete: swept.complete,
+      evidence: swept.evidence,
+      messages: swept.messages,
     }
   }
 

@@ -19,6 +19,7 @@ import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
 import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse-openai.mjs'
 import { WireTap } from '../src/transports/wire.mjs'
 import { Pacer } from '../src/core/async.mjs'
+import { mergeReading, orderedMessages, contentKey, stitchRun, readingAgrees } from '../src/transports/thread-dom.mjs'
 import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -911,4 +912,126 @@ test('files: clicks that never produce a request fail with that as the reason', 
     /produced no request/
   )
   rmSync(dir, { recursive: true, force: true })
+})
+
+// --- whole-thread export ------------------------------------------------------
+// These UIs virtualize: one DOM snapshot is a window onto a thread, never the
+// thread. What decides whether an export can be trusted is the bookkeeping -
+// identity, order, and whether "complete" is claimed honestly - so that is
+// what is tested here, without a browser.
+
+const ID_CONTRACT = { messageNode: '[data-message-id]', idAttr: 'data-message-id', roleAttr: 'data-message-author-role' }
+
+const row = (id, role, text) => ({ id, role, text, links: [], media: [], file_controls: [] })
+
+test('export: a message seen at several viewports is stored once', () => {
+  const store = new Map()
+  const order = []
+  const added1 = mergeReading(store, order, [row('a', 'user', 'one'), row('b', 'assistant', 'two')], ID_CONTRACT)
+  const added2 = mergeReading(store, order, [row('b', 'assistant', 'two'), row('c', 'user', 'three')], ID_CONTRACT)
+  assert.equal(added1, 2)
+  assert.equal(added2, 1, 'only the unseen message counts as new')
+  assert.deepEqual(orderedMessages(store, order).map((m) => m.id), ['a', 'b', 'c'])
+})
+
+test('export: order comes from the walk, not from when a message was discovered', () => {
+  // The upward hydration pass sees the newest messages first. If insertion
+  // order were trusted, the exported thread would start in the middle.
+  const store = new Map()
+  const discovery = []
+  mergeReading(store, discovery, [row('m9', 'assistant', 'last'), row('m8', 'user', 'ninth')], ID_CONTRACT)
+  const order = []
+  mergeReading(store, order, [row('m1', 'user', 'first'), row('m2', 'assistant', 'second')], ID_CONTRACT)
+  mergeReading(store, order, [row('m8', 'user', 'ninth'), row('m9', 'assistant', 'last')], ID_CONTRACT)
+  assert.deepEqual(orderedMessages(store, order).map((m) => m.id), ['m1', 'm2', 'm8', 'm9'])
+})
+
+test('export: a fuller reading of a message replaces a partial one, in place', () => {
+  // A message can be mounted while it is still rendering. The longer text is
+  // the true one, but its position in the thread must not move.
+  const store = new Map()
+  const order = []
+  mergeReading(store, order, [row('a', 'user', 'q'), row('b', 'assistant', 'partial')], ID_CONTRACT)
+  mergeReading(store, order, [row('b', 'assistant', 'partial but complete now')], ID_CONTRACT)
+  const out = orderedMessages(store, order)
+  assert.deepEqual(out.map((m) => m.id), ['a', 'b'])
+  assert.equal(out[1].text, 'partial but complete now')
+})
+
+test('export: without a provider id, identity falls back to content and says so', () => {
+  const contract = { messageNode: '.msg', roleAttr: 'data-role' }
+  const store = new Map()
+  const order = []
+  mergeReading(store, order, [row(null, 'user', 'hello'), row(null, 'assistant', 'hi')], contract)
+  mergeReading(store, order, [row(null, 'user', 'hello')], contract)
+  const out = orderedMessages(store, order)
+  assert.equal(out.length, 2, 'the same content at two viewports is one message')
+  assert.ok(out.every((m) => m.stable_id === false), 'inferred identity must be flagged')
+  assert.notEqual(contentKey(row(null, 'user', 'hello')), contentKey(row(null, 'assistant', 'hello')),
+    'the same text from different authors is not the same message')
+})
+
+test('export: a message discovered but never placed is kept and marked', () => {
+  // Losing a message would be worse than an untidy export, so anything the
+  // ordering walk missed is appended with order_unknown - which is also what
+  // stops the export from being called complete.
+  const store = new Map()
+  const order = []
+  mergeReading(store, order, [row('a', 'user', 'one')], ID_CONTRACT)
+  mergeReading(store, [], [row('z', 'assistant', 'seen while hydrating only')], ID_CONTRACT)
+  const out = orderedMessages(store, order)
+  assert.deepEqual(out.map((m) => m.id), ['a', 'z'])
+  assert.equal(out[0].order_unknown, undefined)
+  assert.equal(out[1].order_unknown, true)
+})
+
+test('export: empty and text-only readings do not create phantom messages', () => {
+  const store = new Map()
+  const order = []
+  mergeReading(store, order, [{ id: null, role: null, text: '' }], ID_CONTRACT)
+  assert.equal(orderedMessages(store, order).length, 0)
+})
+
+// --- thread export: ordering is stitched, not first-sight ------------------
+
+test('a run is spliced in after the messages it follows, not appended', () => {
+  const order = ['a', 'b', 'c']
+  stitchRun(order, ['b', 'x', 'y', 'c'])
+  assert.equal(order.join(','), 'a,b,x,y,c')
+})
+
+test('a later run reaching backwards places its messages before the anchor', () => {
+  const order = ['c', 'd']
+  stitchRun(order, ['a', 'b', 'c'])
+  // 'a' and 'b' share no earlier anchor, so they land at the end - and the
+  // verification below is what catches that as unfaithful.
+  assert.equal(readingAgrees(order, ['a', 'b', 'c']), false)
+})
+
+test('the bug that shipped: a stale top reading is detected by verification', () => {
+  const order = []
+  // A jump to the top that still showed the LAST three messages.
+  stitchRun(order, ['v6', 'v7', 'v8'])
+  stitchRun(order, ['m1', 'm2'])
+  stitchRun(order, ['m2', 'v5', 'v6'])
+  assert.equal(readingAgrees(order, ['m2', 'v5', 'v6']), false)
+})
+
+test('an order consistent with every reading verifies', () => {
+  const order = []
+  stitchRun(order, ['m1', 'm2', 'm3'])
+  stitchRun(order, ['m3', 'm4', 'm5'])
+  stitchRun(order, ['m5', 'm6'])
+  assert.equal(order.join(','), 'm1,m2,m3,m4,m5,m6')
+  assert.equal([['m1', 'm2', 'm3'], ['m3', 'm4', 'm5'], ['m5', 'm6']].every((r) => readingAgrees(order, r)), true)
+})
+
+test('overlapping readings do not duplicate a message', () => {
+  const store = new Map()
+  const order = []
+  const contract = { idAttr: 'data-id' }
+  const rows = (...ids) => ids.map((id) => ({ id, role: 'user', text: `t${id}` }))
+  mergeReading(store, order, rows('1', '2'), contract)
+  mergeReading(store, order, rows('2', '3'), contract)
+  assert.equal(orderedMessages(store, order).map((m) => m.id).join(','), '1,2,3')
 })
