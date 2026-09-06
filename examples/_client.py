@@ -95,6 +95,12 @@ def call(prompt, model="gemini", attachments=None, modes=None, timeout=900):
         # real content - the message existed and was retrieved. Branch on
         # this rather than matching on the prose.
         "provider_error": ub.get("provider_error", False),
+        # On a wire transport (ChatGPT): the slug the SERVER says answered,
+        # and each citation with the character offset in `text` it supports.
+        "answered_by": (ub.get("provenance") or {}).get("answered_by"),
+        "citations": ub.get("citations") or [],
+        # The stream ended before the site said it was done.
+        "truncated": ub.get("truncated", False),
         "tables": ub.get("tables") or [],
         "code_blocks": ub.get("code_blocks") or [],
         # Files the PROVIDER generated, already downloaded to disk.

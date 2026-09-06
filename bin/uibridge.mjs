@@ -44,6 +44,7 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge doctor [provider]          verify Chrome, session and UI contracts
   uibridge doctor <provider> --anon   prove signed-OUT is detected (throwaway profile)
   uibridge ask <provider> "prompt"    single prompt, no server
+                                      [--file=path ...] [--model=id] [--thinking=on|off]
   uibridge capture <provider> ["p"]   record DOM + network for one exchange
   uibridge recon observe <url>        describe an UNKNOWN site: DOM + network
   uibridge recon exchange <url> ...   drive one turn there and record the wire
@@ -269,18 +270,37 @@ async function recon(argv) {
   }
 }
 
-async function ask(id, prompt) {
+/** ask <provider> [--file=path ...] [--model=id] [--thinking=on|off] <prompt...> */
+async function ask(id, args) {
+  const files = []
+  let model = null
+  const modes = {}
+  const words = []
+  for (const a of args) {
+    if (a.startsWith('--file=')) files.push(a.slice(7))
+    else if (a.startsWith('--model=')) model = a.slice(8)
+    else if (a.startsWith('--thinking=')) modes.thinking = a.slice(11) !== 'off'
+    else words.push(a)
+  }
+  const prompt = words.join(' ')
   if (!prompt) usage(1)
   const session = await Session.open(id, { cfg })
   try {
-    const r = await session.ask({ prompt })
+    const r = await session.ask({ prompt, files, model, modes })
     console.log(`\n${r.text}\n`)
     console.log(
       `--- ${r.elapsed_ms}ms | via ${r.extraction}` +
         (r.lossy_math ? ' | maths lossy (no LaTeX in the DOM)' : '') +
+        (r.truncated ? ' | TRUNCATED' : '') +
         ` | tables:${r.tables.length} code:${r.code_blocks.length}` +
-        ` files:${r.files.length} browsed:${r.browsed} sources:${r.sources.length}`
+        ` files:${r.files.length} browsed:${r.browsed} sources:${r.sources.length}` +
+        (r.citations ? ` citations:${r.citations.length}` : '')
     )
+    const p = r.provenance
+    if (p.answered_by) console.log(`--- answered by ${p.answered_by}${p.sent_as ? ` (the page asked for ${p.sent_as})` : ''}`)
+    if (p.final_state) console.log(`--- picker after setup: ${p.final_state}`)
+    if (p.model) console.log(`--- model: requested ${p.model.requested}, ${p.model.verified ? 'verified' : 'NOT verified'} (${p.model.note})`)
+    for (const c of r.citations ?? []) console.log(`    @${c.at}  ${c.url}`)
   } finally {
     await session.close()
   }
@@ -298,7 +318,7 @@ try {
     }
     await doctor(rest[0])
   }
-  else if (cmd === 'ask') await ask(requireProviderArg(rest[0]), rest.slice(1).join(' '))
+  else if (cmd === 'ask') await ask(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'capture') await captureExchange(cfg, requireProviderArg(rest[0]), rest.slice(1).join(' '))
   else if (cmd === 'recon') await recon(rest)
   else usage(cmd === '-h' || cmd === '--help' ? 0 : 1)

@@ -1,69 +1,138 @@
 {
   "_": [
-    "THE CHATGPT DOM CONTRACT - NOT YET CALIBRATED.",
+    "THE CHATGPT CONTRACT. Actuation is DOM (type, click send, set the file",
+    "input); the ANSWER is read off the network. Every value here was measured",
+    "on the live signed-in app on 2026-09-06 with `uibridge recon`, not",
+    "guessed - the guessed version of this file was never enabled.",
     "",
-    "Every value below is a PLACEHOLDER inferred from the general shape of the",
-    "app, not read off the live page. That distinction matters: in the Gemini",
-    "work, guessed selectors caused three separate silent failures (a wrong",
-    "model picker, a stop control in the wrong language, and an assumption",
-    "that Enter submits), and each one presented as a timeout rather than as a",
-    "bad selector.",
-    "",
-    "So this file is marked calibrated:false, which makes the provider refuse",
-    "to run rather than half-work. To calibrate:",
-    "",
-    "  uibridge login chatgpt      sign in once, in the visible window",
-    "  uibridge capture chatgpt    dump DOM + network for one real exchange",
-    "",
-    "then fill each key from that capture and set calibrated:true. The generic",
-    "flow in ../dom-provider.mjs needs no changes - only this contract.",
-    "",
-    "WORTH CHECKING FIRST for this provider: its response stream is ordinary",
-    "SSE over a documented-looking endpoint, unlike Gemini's obfuscated",
-    "batchexecute. If the capture confirms that, a wire transport here would",
-    "avoid the DOM entirely - which is why extraction is a swappable transport",
-    "rather than something baked into the provider."
+    "The UI on this account is pt-BR. Nothing below matches on English button",
+    "text: data-testids and ids are what the app itself keys on."
   ],
-
-  "calibrated": false,
+  "calibrated": true,
   "url": "https://chatgpt.com/",
-
-  "composer": "div#prompt-textarea[contenteditable='true'], textarea#prompt-textarea",
-  "sendButton": "button[data-testid='send-button'], button[aria-label*='Send' i]",
-  "stopButton": "button[data-testid='stop-button'], button[aria-label*='Stop' i]",
-
+  "wire": {
+    "answer": "/backend-api/(f/)?conversation$",
+    "upload": "/backend-api/files/process_upload_stream$",
+    "uploadReady": "file_ready",
+    "effortField": "thinking_effort"
+  },
+  "_wire": [
+    "answer  POST /backend-api/f/conversation streams text/event-stream in the",
+    "        'v1' delta encoding (see transports/sse-openai.mjs). The page sends",
+    "        it - with its sentinel tokens, which are never forged here - and",
+    "        the tap reads the response the page receives. The body carries the",
+    "        model's markdown, the slug of the model that answered, and its",
+    "        sources with the offsets of every inline citation.",
+    "upload  MEASURED 2026-09-06 by setting input#upload-files with a PDF and",
+    "        recording every request: POST /backend-api/files (gets a signed",
+    "        upload_url) -> PUT the bytes to oaiusercontent.com -> POST",
+    "        /backend-api/files/process_upload_stream, an event stream that ends",
+    "        with event 'file.processing.file_ready'. That last call, one per",
+    "        file, with file_ready in its body, is the readiness signal. (An",
+    "        earlier guess of /files/<id>/uploaded never fired: the file sat",
+    "        attached and the prompt was never sent.)",
+    "effort  the page's own request body carries the picker state: `model`",
+    "        (gpt-5-6 at Instantânea, gpt-5-6-thinking at Média AND Alta) and",
+    "        `thinking_effort` (absent / standard / extended). Read via",
+    "        Network.getRequestPostData, never written."
+  ],
+  "composer": "div#prompt-textarea[contenteditable='true']",
+  "_composer": [
+    "A ProseMirror editor. Its no-JS fallback, textarea[name=prompt-textarea], sits",
+    "EARLIER in the DOM and is hidden - listing it as an alternative made",
+    ".first() resolve to the hidden node and wait 30s for it to become visible."
+  ],
+  "sendButton": "button[data-testid='send-button']",
+  "_sendButton": "aria-label 'Enviar prompt' on this account; the testid is language-neutral.",
+  "stopButton": "button[data-testid='stop-button']",
   "responseBlocks": "[data-message-author-role='assistant']",
-  "responseText": ".markdown, .prose",
-  "copyButton": "button[data-testid='copy-turn-action-button'], button[aria-label*='Copy' i]",
-
-  "newChatButton": "a[data-testid='create-new-chat-button'], button[aria-label*='New chat' i]",
-
-  "modelPicker": "button[data-testid='model-switcher-dropdown-button']",
-  "modelOption": "[role='menuitem'], [role='option']",
-  "pickerStrategy": "separate",
-  "models": {},
+  "responseText": ".markdown",
+  "copyButton": "button[data-testid='copy-turn-action-button']",
+  "_response": [
+    "Only a FALLBACK: the answer normally comes off the wire. Turns render as",
+    "<article data-testid='conversation-turn-N'> holding a",
+    "[data-message-author-role] node; the copy control is 'Copiar mensagem'."
+  ],
+  "newChatButton": "a[data-testid='create-new-chat-button']",
+  "models": {
+    "chatgpt-5.6-instant": {
+      "family": "GPT-5[.]6",
+      "effort": 0,
+      "slug": "^gpt-5-6(-instant|-thinking)?$",
+      "sentEffort": null
+    },
+    "chatgpt-5.6-medium": {
+      "family": "GPT-5[.]6",
+      "effort": 1,
+      "slug": "^gpt-5-6-thinking",
+      "sentEffort": "standard"
+    },
+    "chatgpt-5.6-high": {
+      "family": "GPT-5[.]6",
+      "effort": 2,
+      "slug": "^gpt-5-6-thinking",
+      "sentEffort": "extended"
+    },
+    "chatgpt-5.5-instant": {
+      "family": "GPT-5[.]5",
+      "effort": 0,
+      "slug": "^gpt-5-5(-instant|-thinking)?$",
+      "sentEffort": null
+    },
+    "chatgpt-5.5-medium": {
+      "family": "GPT-5[.]5",
+      "effort": 1,
+      "slug": "^gpt-5-5-thinking",
+      "sentEffort": "standard"
+    },
+    "chatgpt-5.5-high": {
+      "family": "GPT-5[.]5",
+      "effort": 2,
+      "slug": "^gpt-5-5-thinking",
+      "sentEffort": "extended"
+    }
+  },
   "_models": [
-    "Left empty on purpose. Inventing ids here would make /v1/models",
-    "advertise models that may not exist on this account - the plan is",
-    "inverted: read the picker during calibration, then write down what is",
-    "actually there."
+    "family x effort, named the way the UI presents them (instant / medium /",
+    "high). A request is VERIFIED when the wire's model_slug matches `slug`",
+    "AND the request body's thinking_effort equals `sentEffort` (null = the",
+    "field is absent, which is what Instantânea sends).",
+    "VERIFIED LIVE 2026-09-06 on the 5.6 family: instant -> gpt-5-6 with no",
+    "effort field (auto-routes: a PDF question at this setting was answered by",
+    "gpt-5-6-thinking, so the instant slug pattern admits it); medium ->",
+    "gpt-5-6-thinking + standard; high -> gpt-5-6-thinking + extended. The 5.5",
+    "family is the same shape by construction of the picker; see git log for",
+    "its live check."
   ],
   "modes": {},
-
   "attachStrategy": "file-input",
-  "fileInput": "input[type='file']",
-  "attachmentChip": "[data-testid*='attachment'], [class*='attachment']",
-  "uploadingText": "Uploading",
-
+  "fileInput": "input#upload-files",
+  "_fileInput": [
+    "A hidden input[type=file] with no accept filter and `multiple`, so PDFs",
+    "and CSVs go straight in; the two testid'd inputs (upload-photos-input,",
+    "upload-media-input) are image/media only. No chip selector: readiness is",
+    "the upload confirmation on the wire."
+  ],
+  "attachmentChip": null,
   "sourceChip": null,
   "generatedFile": null,
-
-  "transientText": ["Searching", "Thinking", "Reasoning"],
-  "searchTransient": "Searching the web|Searching",
-
+  "transientText": [
+    "Pesquisando",
+    "Searching",
+    "Pensando",
+    "Thinking",
+    "Raciocinando",
+    "Reasoning"
+  ],
+  "searchTransient": "Pesquisando|Searching",
+  "errorText": "Something went wrong|Algo deu errado|Ocorreu um erro|try again|tente novamente",
   "auth": {
     "sessionEndpoint": "/api/auth/session",
-    "sessionUserFields": ["user.email", "user.id", "accessToken"],
+    "sessionUserFields": [
+      "user.email",
+      "user.id",
+      "accessToken"
+    ],
     "anonAssetPattern": "unauth-mweb",
     "authCookiePattern": "^__Secure-next-auth[.]session-token",
     "signedOutPattern": "Fazer login|Log in|Sign up|Inscrever-se|Stay logged out",
@@ -97,7 +166,31 @@
     "logged out. A request against a signed-out browser does not fail; it",
     "succeeds with a weaker model and nothing marks the result."
   ],
-  "signedOutMarker": "Log in|Sign up|Stay logged out",
-  "accountMarker": "[data-testid='profile-button'], button[aria-label*='Account' i]",
-  "challengeText": "unusual activity|verify you are human|not a robot|Just a moment"
+  "accountMarker": "[data-testid='accounts-profile-button']",
+  "challengeText": "unusual activity|verify you are human|not a robot|Just a moment",
+  "picker": {
+    "trigger": "form button[aria-haspopup='menu'][class*='composer-pill']",
+    "content": "[data-testid='composer-intelligence-picker-content']",
+    "slider": "[role='slider']",
+    "effortLabel": "[role='menuitem'][aria-label='Selecionar modelo']",
+    "familyOption": "[role='menuitemradio']",
+    "familyPanelToggle": "[role='menuitem'][aria-label='Selecionar modelo']",
+    "familyPanel": "[data-testid='composer-model-picker-slider-advanced-view']",
+    "effortPanel": "[data-testid='composer-model-picker-slider-simple-view']"
+  },
+  "_picker": [
+    "MEASURED 2026-09-06. The composer pill (its text is the current effort,",
+    "'Instantânea' by default; on hover 'Esforço de raciocínio') opens ONE",
+    "popover with TWO panels, switched by data-active:",
+    "  simple view    the EFFORT slider - aria-valuenow 0 Instantânea, 1 Média,",
+    "                 2 Alta, 3 Pro ('Upgrade necessário' on this plan; the",
+    "                 value refuses to move there). Its help text says to use",
+    "                 the arrow keys, so that is how it is driven.",
+    "  advanced view  the FAMILY radios (menuitemradio): 'GPT-5.6 Sol' (checked",
+    "                 by default) and 'GPT-5.5'. Reached by clicking the row",
+    "                 labelled 'Selecionar modelo'; a click on a radio while the",
+    "                 simple view is up is intercepted by that panel.",
+    "One Escape steps back a panel; a second closes the popover. The header",
+    "has no model-switcher button on this build."
+  ]
 }

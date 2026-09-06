@@ -95,3 +95,41 @@ export async function retry(fn, { attempts = 2, isRetryable = (e) => !!e.retryab
   }
   throw last
 }
+
+/**
+ * Space request STARTS at least `intervalMs` apart, across everything that
+ * shares this pacer.
+ *
+ * This exists because a burst of fresh conversations - a dozen in fifteen
+ * minutes, each a full page load - tripped ChatGPT's throttling during
+ * calibration. The site's abuse heuristics are not something to probe, and
+ * a batch pipeline is exactly the caller that would otherwise fire hundreds
+ * of requests back to back. The pacer is provider-wide, not per tab, so
+ * concurrency does not defeat it.
+ */
+export class Pacer {
+  #interval
+  #next = 0
+  #chain = Promise.resolve()
+
+  constructor(intervalMs = 0) {
+    this.#interval = Math.max(0, intervalMs)
+  }
+
+  get intervalMs() {
+    return this.#interval
+  }
+
+  /** Resolves when it is this caller's turn; returns the ms it waited. */
+  wait() {
+    const turn = this.#chain.then(async () => {
+      const now = Date.now()
+      const delay = Math.max(0, this.#next - now)
+      this.#next = Math.max(now, this.#next) + this.#interval
+      if (delay) await sleep(delay)
+      return delay
+    })
+    this.#chain = turn.catch(() => {})
+    return turn
+  }
+}

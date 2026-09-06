@@ -12,7 +12,7 @@ import { loadConfig, portFor, providerSettings } from './core/config.mjs'
 import { logger, requestId } from './core/log.mjs'
 import { BridgeError, ChallengeError, RequestError, SignedOutError } from './core/errors.mjs'
 import { signedOutMessage } from './core/auth.mjs'
-import { retry } from './core/async.mjs'
+import { Pacer, retry } from './core/async.mjs'
 import { providerClass, providerIds } from './providers/registry.mjs'
 
 export class Session {
@@ -21,6 +21,7 @@ export class Session {
   #provider
   #settings
   #log
+  #pacer
 
   constructor({ provider, settings, ctx, pool, log }) {
     this.#provider = provider
@@ -28,6 +29,7 @@ export class Session {
     this.#ctx = ctx
     this.#pool = pool
     this.#log = log
+    this.#pacer = new Pacer(settings.minIntervalMs ?? 0)
   }
 
   static async open(id, { cfg = loadConfig(), headless } = {}) {
@@ -148,6 +150,10 @@ export class Session {
 
   async #attempt({ prompt, files, model, modes, rid, log, started }) {
     const resolved = files
+    // Pace BEFORE taking a tab, so a queued request holds nothing while it
+    // waits and the spacing applies across the whole provider.
+    const waited = await this.#pacer.wait()
+    if (waited > 1000) log.debug(`paced: waited ${(waited / 1000).toFixed(1)}s (minIntervalMs=${this.#pacer.intervalMs})`)
     return this.#pool.withTab(async (page) => {
       const provider = this.#provider
       provider.log = log
@@ -188,11 +194,43 @@ export class Session {
       if (resolved.length) await provider.attach(page, resolved)
 
       const ctx = { turnsBefore: await provider.turnCount?.(page) ?? (await countTurns(page, provider)) }
-      await provider.submit(page, prompt)
+      await provider.submit(page, prompt, ctx)
       const tSubmit = Date.now()
 
       await provider.awaitCompletion(page, ctx)
       const result = await provider.extract(page, ctx)
+
+      // THE MODEL THAT ANSWERED, when the transport can see it. A wire
+      // transport reads the server's own slug off the response; that is the
+      // fact a methods section needs, and it outranks any picker label.
+      if (result.sent_as) provenance.sent_as = result.sent_as
+      if (result.sent_effort !== undefined) provenance.sent_effort = result.sent_effort ?? null
+      if (result.model_slug) {
+        provenance.answered_by = result.model_slug
+        const expected = provenance.model?.expected_slug
+        if (expected) {
+          const slugOk = new RegExp(expected).test(result.model_slug)
+          // Two efforts can share a slug (ChatGPT sends gpt-5-6-thinking for
+          // both Média and Alta); the request's own effort field tells them
+          // apart, so it is part of the verification when the model asks.
+          const wantEffort = provenance.model.expected_effort
+          const effortOk = wantEffort === undefined || (wantEffort ?? null) === (result.sent_effort ?? null)
+          const hit = slugOk && effortOk
+          provenance.model.verified = hit
+          const sentDesc = `${result.model_slug}${result.sent_effort ? ` at ${result.sent_effort} effort` : ''}`
+          provenance.model.note = hit
+            ? `the server confirms ${sentDesc} answered`
+            : `asked for ${model} but the page sent ${sentDesc}`
+          if (!hit) log.warn(provenance.model.note)
+          if (!hit && this.#settings.strictModel) {
+            throw new BridgeError(`${this.id}: ${provenance.model.note} (strictModel is on)`, {
+              status: 502,
+              code: 'model_not_applied',
+              retryable: true,
+            })
+          }
+        }
+      }
 
       log.info(
         `${result.text.length} chars in ${((Date.now() - tSubmit) / 1000).toFixed(1)}s ` +

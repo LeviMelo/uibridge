@@ -17,6 +17,8 @@ import { resolveModel, modelCatalogue, providerIds, providerClass } from '../src
 import { RequestError, SignedOutError, ContractError } from '../src/core/errors.mjs'
 import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
 import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse-openai.mjs'
+import { WireTap } from '../src/transports/wire.mjs'
+import { Pacer } from '../src/core/async.mjs'
 
 const NL = String.fromCharCode(10)
 const lines = (...l) => l.join(NL)
@@ -487,4 +489,136 @@ test('wire: SSE framing survives CRLF', () => {
   const raw = `event: delta${CR}${LF}data: {"v":1}${CR}${LF}${CR}${LF}`
   assert.equal(parseSSE(raw).length, 1)
   assert.equal(parseSSE(raw)[0].event, 'delta')
+})
+
+// --- the wire tap ------------------------------------------------------------
+// Driven with a fake CDP client, event by event, in the order Chrome emits
+// them. What is being tested is the bookkeeping: arming, matching, chunk
+// assembly, completion - not Chrome.
+
+function fakeCDP() {
+  const handlers = new Map()
+  const sent = []
+  const client = {
+    on(ev, fn) { handlers.set(ev, fn) },
+    async send(method, params) {
+      sent.push({ method, params })
+      if (method === 'Network.streamResourceContent') return { bufferedData: '' }
+      if (method === 'Network.getRequestPostData') return { postData: '{"model":"gpt-5-6-thinking"}' }
+      return {}
+    },
+    emit: (ev, e) => handlers.get(ev)?.(e),
+    sent,
+  }
+  return client
+}
+
+const b64 = (s) => Buffer.from(s, 'utf8').toString('base64')
+
+test('wire tap: a capture armed before the request sees it, one armed after does not', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const early = tap.expect(/conversation$/)
+  cdp.emit('Network.requestWillBeSent', { requestId: '1', request: { url: 'https://x/backend-api/f/conversation', method: 'POST' } })
+  const late = tap.expect(/conversation$/)
+  cdp.emit('Network.responseReceived', { requestId: '1', response: { status: 200, mimeType: 'text/event-stream' } })
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.dataReceived', { requestId: '1', data: b64('data: "v1"\n\n') })
+  cdp.emit('Network.loadingFinished', { requestId: '1' })
+  const res = await early.finished(1000)
+  assert.equal(res.ok, true)
+  assert.equal(res.body, 'data: "v1"\n\n')
+  await assert.rejects(late.request(50))
+})
+
+test('wire tap: subscribes to the stream at responseReceived, not later', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  tap.expect(/answer/)
+  cdp.emit('Network.requestWillBeSent', { requestId: '7', request: { url: 'https://x/answer', method: 'POST' } })
+  cdp.emit('Network.responseReceived', { requestId: '7', response: { status: 200, mimeType: 'text/event-stream' } })
+  await new Promise((r) => setImmediate(r))
+  const call = cdp.sent.find((s) => s.method === 'Network.streamResourceContent')
+  assert.ok(call, 'streamResourceContent must be requested')
+  assert.equal(call.params.requestId, '7')
+})
+
+test('wire tap: a multibyte character split across chunks survives', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/answer/)
+  cdp.emit('Network.requestWillBeSent', { requestId: '2', request: { url: 'https://x/answer', method: 'POST' } })
+  cdp.emit('Network.responseReceived', { requestId: '2', response: { status: 200, mimeType: 'text/plain' } })
+  await new Promise((r) => setImmediate(r))
+  const bytes = Buffer.from('coração ' + String.fromCharCode(0xe200), 'utf8')
+  // Cut inside the "ç" and inside the sentinel.
+  const cuts = [3, 4, bytes.length - 1]
+  let prev = 0
+  for (const c of [...cuts, bytes.length]) {
+    cdp.emit('Network.dataReceived', { requestId: '2', data: bytes.subarray(prev, c).toString('base64') })
+    prev = c
+  }
+  cdp.emit('Network.loadingFinished', { requestId: '2' })
+  const res = await cap.finished(1000)
+  assert.equal(res.body, 'coração ' + String.fromCharCode(0xe200))
+})
+
+test('wire tap: collect() counts one completed request per upload, and reads its body', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const ups = tap.collect(/process_upload_stream$/)
+  for (const id of ['a', 'b']) {
+    cdp.emit('Network.requestWillBeSent', { requestId: id, request: { url: 'https://x/backend-api/files/process_upload_stream', method: 'POST' } })
+    cdp.emit('Network.responseReceived', { requestId: id, response: { status: 200, mimeType: 'text/event-stream' } })
+  }
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.dataReceived', { requestId: 'a', data: b64('{"event":"file.processing.file_ready"}') })
+  cdp.emit('Network.loadingFinished', { requestId: 'a' })
+  assert.equal(ups.completed().length, 1)
+  await assert.rejects(ups.atLeast(2, 50), /2 .*request/)
+  cdp.emit('Network.dataReceived', { requestId: 'b', data: b64('{"event":"file.processing.file_ready"}') })
+  cdp.emit('Network.loadingFinished', { requestId: 'b' })
+  const done = await ups.atLeast(2, 1000)
+  assert.equal(done.length, 2)
+  assert.ok(done.every((u) => /file_ready/.test(u.body)))
+})
+
+test('wire tap: a failed load completes with ok=false and the error named', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/answer/)
+  cdp.emit('Network.requestWillBeSent', { requestId: '3', request: { url: 'https://x/answer', method: 'POST' } })
+  cdp.emit('Network.responseReceived', { requestId: '3', response: { status: 200, mimeType: 'text/event-stream' } })
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.dataReceived', { requestId: '3', data: b64('data: {"v":"half') })
+  cdp.emit('Network.loadingFailed', { requestId: '3', errorText: 'net::ERR_CONNECTION_RESET' })
+  const res = await cap.finished(1000)
+  assert.equal(res.ok, false)
+  assert.equal(res.error, 'net::ERR_CONNECTION_RESET')
+  assert.equal(res.body, 'data: {"v":"half')
+})
+
+test('wire tap: the body the page sent is readable, fetched on demand', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/answer/)
+  cdp.emit('Network.requestWillBeSent', { requestId: '4', request: { url: 'https://x/answer', method: 'POST', hasPostData: true } })
+  assert.equal(JSON.parse(await cap.sentBody()).model, 'gpt-5-6-thinking')
+})
+
+// --- pacing --------------------------------------------------------------------
+test('pacer: starts are spaced by the interval, across concurrent callers', async () => {
+  const p = new Pacer(120)
+  const t0 = Date.now()
+  const stamps = await Promise.all([1, 2, 3].map(() => p.wait().then(() => Date.now() - t0)))
+  stamps.sort((a, b) => a - b)
+  assert.ok(stamps[0] < 60, `first should not wait (${stamps[0]}ms)`)
+  assert.ok(stamps[1] >= 100, `second spaced (${stamps[1]}ms)`)
+  assert.ok(stamps[2] >= 220, `third spaced (${stamps[2]}ms)`)
+})
+
+test('pacer: an interval of 0 never waits', async () => {
+  const p = new Pacer(0)
+  const waited = await Promise.all([p.wait(), p.wait(), p.wait()])
+  assert.deepEqual(waited, [0, 0, 0])
 })

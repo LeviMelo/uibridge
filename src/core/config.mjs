@@ -52,6 +52,11 @@ const DEFAULTS = {
     //        integrity matters more than getting an answer - a systematic
     //        review must not attribute a row to a model that did not write it.
     strictModel: false,
+    // Minimum spacing between request STARTS on a provider, across all its
+    // tabs. A burst of fresh conversations trips these sites' throttling,
+    // and a batch pipeline is exactly the caller that would burst. Per
+    // provider below; 0 disables.
+    minIntervalMs: 0,
   },
 }
 

@@ -108,6 +108,11 @@ export function completionResponse({ modelId, result, provider }) {
       browsed: result.browsed,
       searched: result.searched ?? false,
       sources: result.sources,
+      // On a wire transport each citation carries `at`: the character offset
+      // in `content` where the claim it supports is made.
+      citations: result.citations ?? [],
+      // The stream ended before the site said it was done.
+      truncated: result.truncated ?? false,
       json: extractJSON(result.text),
     },
   }

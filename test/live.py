@@ -306,11 +306,42 @@ def t_unknown_model_falls_back():
 def t_models_endpoint():
     with urllib.request.urlopen(f"{BASE}/v1/models", timeout=15) as r:
         ids = [m["id"] for m in json.loads(r.read())["data"]]
-    need = {"gemini-flash", "gemini-flash-lite", "gemini-pro"}
-    # And it must NOT advertise a provider whose selectors are still
-    # placeholders: an id here is a promise that calling it works.
-    ok = need.issubset(set(ids)) and "chatgpt" not in ids
-    check("/v1/models advertises only calibrated ids", ok, str(ids))
+    need = {"gemini-flash", "gemini-flash-lite", "gemini-pro",
+            "chatgpt", "chatgpt-5.6-instant", "chatgpt-5.6-high"}
+    # An id here is a promise that calling it works: both providers are
+    # calibrated now, and a provider whose selectors are placeholders would
+    # be missing from this list rather than present.
+    ok = need.issubset(set(ids))
+    check("/v1/models advertises every calibrated id", ok, str(ids))
+
+
+def t_chatgpt_wire_answer():
+    """ChatGPT's answer comes off the network, with the server's model slug.
+
+    The point of the check is provenance: `extraction` must be "wire" (not a
+    clipboard tier) and `answered_by` must be the slug the site reported, so
+    a row can be attributed to the model that actually wrote it.
+    """
+    status, body = raw_post({"model": "chatgpt-5.6-instant",
+                             "messages": [{"role": "user",
+                                           "content": "Reply with exactly one word: ready."}]},
+                            timeout=300)
+    ub = body.get("_uibridge", {})
+    ok = status == 200 and ub.get("extraction") == "wire" and bool(ub.get("provenance", {}).get("answered_by"))
+    check("chatgpt answers over the wire with a model slug", ok,
+          f"HTTP {status} via {ub.get('extraction')} by {ub.get('provenance', {}).get('answered_by')}")
+
+
+def t_chatgpt_pdf_attachment():
+    """A PDF reaches ChatGPT: the upload is confirmed on the wire before sending."""
+    status, body = raw_post({"model": "chatgpt-5.6-instant",
+                             "messages": [{"role": "user",
+                                           "content": "From the attached PDF only, give the sample size as a number."}],
+                             "attachments": [str(DATA / "trial_abstract.pdf")]},
+                            timeout=300)
+    text = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+    check("chatgpt pdf attachment answered", status == 200 and any(ch.isdigit() for ch in text),
+          f"HTTP {status}: {text[:80]!r}")
 
 
 TESTS = [
@@ -321,6 +352,7 @@ TESTS = [
     t_sources_from_menu, t_no_false_browsing,
     t_tab_isolation, t_missing_file_fails_fast, t_empty_messages,
     t_unknown_model_falls_back, t_models_endpoint,
+    t_chatgpt_wire_answer, t_chatgpt_pdf_attachment,
 ]
 
 

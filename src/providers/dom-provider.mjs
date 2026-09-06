@@ -28,6 +28,8 @@ import {
   readRenderedText,
 } from '../transports/dom.mjs'
 import { reconstructMarkdown } from '../transports/markdown-dom.mjs'
+import { WireTap } from '../transports/wire.mjs'
+import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
 const cdpSessions = new WeakMap()
 async function cdp(page) {
@@ -50,9 +52,16 @@ export class DomProvider extends Provider {
       modes: s.modes ?? {},
       attachments: !!s.dropTarget || !!s.fileInput,
       generatedFiles: !!s.generatedFile?.chip,
-      citations: !!s.sourceChip,
-      transports: ['dom'],
+      citations: !!s.sourceChip || !!s.wire?.answer,
+      // A provider whose answer is readable off the network declares it in
+      // selectors.json under `wire`; the DOM stays as the fallback.
+      transports: s.wire?.answer ? ['wire', 'dom'] : ['dom'],
     })
+  }
+
+  /** Is the answer read from the network on this provider? */
+  get wired() {
+    return !!this.sel.wire?.answer
   }
 
   // --- lifecycle -----------------------------------------------------------
@@ -280,11 +289,36 @@ export class DomProvider extends Provider {
 
   async attach(page, files) {
     const how = this.sel.attachStrategy ?? 'cdp-drag'
-    if (how === 'cdp-drag') await this.#attachByDrag(page, files)
-    else if (how === 'file-input') await this.#attachByInput(page, files)
-    else if (how === 'file-chooser') await this.#attachByChooser(page, files)
-    else throw new ContractError(this.id, 'attachStrategy', how)
-    await this.waitForAttachments(page, files.length)
+    // Where the upload is visible on the network, THAT is the readiness
+    // signal: one completed upload-confirmation request per file. Armed
+    // before the files are handed over, so none can be missed.
+    const uploadPattern = this.sel.wire?.upload
+    const uploads = uploadPattern ? (await WireTap.attach(page)).collect(uploadPattern) : null
+    try {
+      if (how === 'cdp-drag') await this.#attachByDrag(page, files)
+      else if (how === 'file-input') await this.#attachByInput(page, files)
+      else if (how === 'file-chooser') await this.#attachByChooser(page, files)
+      else throw new ContractError(this.id, 'attachStrategy', how)
+      if (uploads) {
+        const done = await uploads.atLeast(files.length, this.settings.uploadTimeoutMs)
+        // A completed call is not the same as a processed file: the stream
+        // has to say so (e.g. "file_ready"), or the site may still be
+        // extracting text from it when the prompt goes out.
+        const ready = this.sel.wire.uploadReady ? new RegExp(this.sel.wire.uploadReady) : null
+        const failed = done.filter((u) => !u.ok || (ready && !ready.test(u.body)))
+        if (failed.length) {
+          throw new BridgeError(
+            `${this.id}: ${failed.length} of ${files.length} upload(s) were refused by the site ` +
+              `(HTTP ${failed.map((u) => u.status ?? u.error).join(', ')})`,
+            { status: 502, code: 'upload_failed', retryable: true }
+          )
+        }
+        this.log?.debug(`${files.length} upload(s) confirmed on the wire`)
+      }
+      await this.waitForAttachments(page, files.length)
+    } finally {
+      uploads?.stop()
+    }
   }
 
   /**
@@ -369,9 +403,15 @@ export class DomProvider extends Provider {
    * The composer emptying is the observable confirmation, so verify it and
    * retry once before giving up.
    */
-  async submit(page, prompt) {
+  async submit(page, prompt, ctx = {}) {
     const s = this.sel
     const composer = page.locator(s.composer).first()
+
+    // ARM THE WIRE BEFORE TYPING. On a wired provider the answer is read
+    // from the response the page receives, and a tap armed after the click
+    // can only see the next request. It also gives a stronger proof of
+    // submission than an emptied composer: the request actually went out.
+    if (this.wired) ctx.wire = (await WireTap.attach(page)).expect(s.wire.answer)
 
     const type = async () => {
       await composer.click()
@@ -393,6 +433,10 @@ export class DomProvider extends Provider {
       await type()
       await fire()
       try {
+        if (ctx.wire) {
+          await ctx.wire.request(8000)
+          return
+        }
         // Submission clears the composer. Seconds, not minutes - if it has
         // not happened by now it is not going to.
         await waitFor(
@@ -429,6 +473,8 @@ export class DomProvider extends Provider {
     const s = this.sel
     const cfg = this.settings
     const before = ctx.turnsBefore ?? 0
+
+    if (ctx.wire && (await this.#awaitWire(ctx))) return ctx
 
     // A turn appears within a second or two of a real submission, so this
     // gets its OWN short budget rather than the full response timeout.
@@ -482,11 +528,60 @@ export class DomProvider extends Provider {
     return ctx
   }
 
+  /**
+   * Completion on the wire: the response connection closes.
+   *
+   * Returns true when a usable answer was decoded, false to let the DOM path
+   * take over. A refusal from the site (a 4xx/5xx on the request) is thrown
+   * here, because then no message was generated for anyone to read.
+   */
+  async #awaitWire(ctx) {
+    const cfg = this.settings
+    const res = await ctx.wire.finished(cfg.responseTimeoutMs)
+    if (!res.ok && res.status && !(res.body && res.body.includes('data:'))) {
+      let detail = res.body.slice(0, 300)
+      try {
+        const j = JSON.parse(res.body)
+        detail = j?.detail?.message ?? j?.detail ?? j?.error?.message ?? detail
+      } catch {}
+      throw new BridgeError(
+        `${this.id}: the site refused the request with HTTP ${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
+        { status: 502, code: 'upstream_refused', retryable: res.status === 429 || res.status >= 500, detail: { status: res.status } }
+      )
+    }
+    const decoded = decodeDeltaStream(res.body)
+    // What the UI put in its own request - the model field it chose from
+    // the picker state. Independent of the answer and of the picker label.
+    let sentAs = null
+    let sentEffort = null
+    try {
+      const body = await ctx.wire.sentBody()
+      const j = body ? JSON.parse(body) : null
+      sentAs = j?.model ?? null
+      // Named by the provider contract, because the field is the site's own
+      // vocabulary (ChatGPT: thinking_effort = standard | extended).
+      const effortField = this.sel.wire.effortField
+      sentEffort = effortField && j ? j[effortField] ?? null : null
+    } catch {}
+    ctx.wireResult = { res, decoded, sentAs, sentEffort }
+    if (decoded.text) {
+      if (res.error) this.log?.warn(`the response connection ended with "${res.error}"; the answer may be cut short`)
+      return true
+    }
+    this.log?.warn(
+      `the wire carried no assistant text (${res.bytes} bytes, ${decoded.frames} frames` +
+        `${res.error ? `, ${res.error}` : ''}); reading the page instead`
+    )
+    return false
+  }
+
   // --- output --------------------------------------------------------------
 
   async extract(page, ctx) {
     const s = this.sel
     const cfg = this.settings
+
+    if (ctx.wireResult?.decoded?.text) return this.#extractWire(ctx)
 
     // THREE TIERS, best first. The reason there are three is that the best
     // one depends on the system clipboard, which can fail on its own: on this
@@ -569,6 +664,43 @@ export class DomProvider extends Provider {
       sources,
       browsed,
       searched,
+    }
+  }
+
+  /**
+   * The answer as the server sent it. No clipboard, no DOM, no guessing
+   * which tier produced the text: this IS the model's markdown.
+   */
+  #extractWire(ctx) {
+    const s = this.sel
+    const { res, decoded } = ctx.wireResult
+    const text = decoded.text
+    const providerError = !!s.errorText && new RegExp(s.errorText, 'i').test(text) && text.length < 400
+    if (providerError) this.log?.warn(`the site answered with its own error message: "${text.trim().slice(0, 90)}"`)
+    return {
+      text,
+      extraction: 'wire',
+      markdown: true,
+      lossy_math: false,
+      provider_error: providerError,
+      tables: parseTables(text),
+      code_blocks: parseCodeBlocks(text),
+      files: [],
+      // Sources are everything the turn consulted; citations are the ones
+      // the answer actually leans on, each with the offset in `text` where
+      // the claim is made.
+      sources: decoded.sources,
+      citations: decoded.citations,
+      browsed: decoded.citations.length > 0,
+      searched: decoded.sources.length > 0,
+      unresolved_citations: decoded.unresolved_markers,
+      model_slug: decoded.model,
+      sent_as: ctx.wireResult.sentAs,
+      sent_effort: ctx.wireResult.sentEffort,
+      conversation_id: decoded.conversationId,
+      // A stream that ended without [DONE] was cut off, and the text is
+      // whatever had arrived. Reported, never hidden.
+      truncated: !decoded.finished || !!res.error,
     }
   }
 

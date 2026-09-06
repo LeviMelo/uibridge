@@ -36,5 +36,7 @@ export default class GeminiProvider extends DomProvider {
     // fewer checks ends a read inside one of those pauses.
     settleChecks: 5,
     concurrency: 2,
+    // Spacing between request starts; see the ChatGPT provider for why.
+    minIntervalMs: 8000,
   }
 }

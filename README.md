@@ -46,9 +46,11 @@ print(ub["browsed"], ub["sources"])               # whether it searched, and wha
 node bin/uibridge.mjs serve                 # the API (default 127.0.0.1:8477)
 node bin/uibridge.mjs login <provider>      # sign in; you type the password, never this tool
 node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
-node bin/uibridge.mjs ask gemini "..."      # one prompt, no server
-node bin/uibridge.mjs capture gemini ["p"]  # record DOM + network for calibration
-npm test                                    # 25 unit tests, no browser, ~0.5s
+node bin/uibridge.mjs ask chatgpt "..."     # one prompt, no server
+node bin/uibridge.mjs ask chatgpt --file=paper.pdf --model=chatgpt-5.6-high "..."
+node bin/uibridge.mjs doctor chatgpt --anon # prove signed-OUT is detected (throwaway profile)
+node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabulary + network
+npm test                                    # 49 unit tests, no browser, ~1s
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -62,7 +64,10 @@ honest about what happened rather than to look tidy:
 |---|---|
 | `provenance.model.applied` / `.verified` | Requested is not applied. Gemini genuinely drops model switches (its own bug), so the selection is retried and then read back from the UI. `verified: false` means the UI is on something else — `applied` names what. For a systematic review this is the audit trail; set `strictModel: true` in config to make a mismatch an error instead. |
 | `provenance.final_state` | The picker label read *after* model and modes were both applied. The per-step labels are stale by then. |
-| `extraction` | Which tier produced the text: `copy` (the provider's own markdown), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
+| `extraction` | Which tier produced the text: `wire` (the response body the page received — the model's own markdown, ChatGPT), `copy` (the provider's own markdown via its copy control), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
+| `provenance.answered_by`, `provenance.sent_as` | Wire only. The slug the *server* says answered, and the model the page put in its own request. When a model was requested, `provenance.model.verified` is re-checked against `answered_by`, which outranks any picker label. |
+| `citations` | Wire only. Each inline citation with `at`, the character offset in the content where the claim it supports is made, plus `url`, `title`, `site`, `snippet`. `sources` is everything the turn consulted; `citations` is what the answer leans on. |
+| `truncated` | `true` when the stream ended before the site said it was done. The text is whatever arrived. |
 | `markdown` | `true` for either markdown tier. |
 | `lossy_math` | `true` when maths was rendered but its source is not in the DOM, so the formula is glyphs rather than LaTeX. Never passed off as source. |
 | `tables`, `code_blocks` | Parsed from that markdown, so a pipeline gets rows and source instead of a string to re-parse. |
@@ -84,13 +89,15 @@ src/core/         provider-agnostic: chrome lifecycle, tab pool, config,
                   typed errors, async primitives, markdown parsing
 src/providers/    contract.mjs   the seam every provider implements
                   dom-provider.mjs  the generic request flow, written once
-                  gemini/        selectors.json + its quirks
-                  chatgpt/       same shape, not yet calibrated
+                  gemini/        selectors.json + its quirks (DOM extraction)
+                  chatgpt/       selectors.json + its two-axis picker (wire extraction)
 src/transports/   extraction as a swappable concern:
+                  wire.mjs          a CDP tap on the response the page receives
+                  sse-openai.mjs    decoder for ChatGPT's delta stream
                   dom.mjs           copy button, files, completion signals
                   markdown-dom.mjs  structured fallback when copy is dead
 src/api/          OpenAI mapping, separate from HTTP handling
-src/tools/        capture: record a real exchange for calibration
+src/tools/        recon: map an unknown site's DOM and network; anoncheck
 bin/uibridge.mjs  CLI
 ```
 
@@ -186,10 +193,14 @@ including `Network.streamResourceContent` and collecting still-in-flight
 requests), there is no service worker, and the visible RPCs are obfuscated
 positional arrays behind an `at` token.
 
-So extraction is a *transport* rather than something baked in, and
-`uibridge capture` records DOM and network side by side and reports whether
-any payload actually contains the answer. When a provider's stream is
-readable, a wire transport slots in without touching anything else.
+So extraction is a *transport* rather than something baked in. For ChatGPT
+the stream *is* readable — `POST /backend-api/f/conversation` answers with
+an event stream in a compact delta encoding — and `src/transports/wire.mjs`
+taps it with CDP (`Network.streamResourceContent`, subscribed at
+`responseReceived` or the body is gone). The page still does the sending,
+with its own anti-bot tokens; nothing is forged or replayed. `uibridge recon`
+is how that was found: point it at a URL and it maps the DOM vocabulary and
+every request, flagging which payload holds the answer.
 
 ## Status
 
@@ -220,12 +231,15 @@ prompt, attach CSVs and PDFs, pick `gemini-flash` / `gemini-flash-lite` /
 code parsed, any file it generated already on disk, and its citations when
 it actually searched. That is the whole working surface.
 
-**ChatGPT does not work.** There is a directory for it holding guessed
-selectors and `calibrated: false`. It is not advertised by `/v1/models`, it
-cannot be called by accident, and asking for it returns `501 not_calibrated`
-with instructions. It is a placeholder for the next piece of work, nothing
-more — `uibridge capture chatgpt`, fill in its `selectors.json` from what the
-capture shows, set `calibrated: true`.
+**ChatGPT works, and reads its answer off the network.** Signed in as you,
+one conversation per request: send a prompt, attach PDFs and CSVs (the
+upload is confirmed on the wire before the prompt goes out), pick
+`chatgpt-5.6-instant` / `-medium` / `-high` or the `chatgpt-5.5-*` family,
+and get the model's own markdown back with the server's model slug in
+`provenance.answered_by`, its sources, and each citation tied to the
+character offset it supports. The UI is only used to type, click and set the
+picker; nothing is scraped, so translations and class names cannot break
+extraction. Files ChatGPT itself generates are not retrieved yet.
 
 ## Notes
 
@@ -237,5 +251,11 @@ capture shows, set `calibrated: true`.
 - Concurrency is per provider (`config.json` → `provider.concurrency`, default
   2). Every request opens a fresh conversation, so requests cannot see each
   other's context.
+- **Requests are paced.** `minIntervalMs` (ChatGPT 20s, Gemini 8s, per
+  provider in `config.json`) is the minimum spacing between request starts
+  across all of a provider's tabs. A burst of fresh conversations — a dozen
+  in fifteen minutes during calibration — tripped ChatGPT's throttling, and
+  a batch is exactly the caller that would burst. Raise it for long runs;
+  never lower it to speed a batch up.
 - There are no fixed sleeps in the request path. Every wait is a condition
   with a budget; "stopped changing" is a measurement, not padding.
