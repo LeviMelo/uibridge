@@ -264,4 +264,10 @@ export async function captureExchange(cfg, id, promptArg) {
     console.log('               DOM extraction is the only route for this provider.')
   }
   console.log(`\nsaved to ${dir}\n`)
+
+  // Close the tab we opened. The throwaway probe scripts this replaces left
+  // tabs accumulating in the automation browser until connectOverCDP itself
+  // started timing out - a slow failure with no obvious cause.
+  await client.detach().catch(() => {})
+  await page.close().catch(() => {})
 }

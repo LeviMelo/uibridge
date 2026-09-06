@@ -13,6 +13,17 @@
 const NL = String.fromCharCode(10)
 
 /**
+ * Normalise line endings before anything parses them.
+ *
+ * The clipboard hands back CRLF on Windows, so a perfectly good fenced code
+ * block arrives with a carriage return straight after the language tag, and
+ * a newline-anchored fence pattern then matches nothing at all. That
+ * presented as "the model emitted no code" when the code was right there.
+ */
+const CR = String.fromCharCode(13)
+export const normalizeNewlines = (s) => (s ?? '').split(CR + NL).join(NL).split(CR).join(NL)
+
+/**
  * Parse GitHub-style pipe tables.
  *
  * A table is a header row followed by a delimiter row (|---|---|); requiring
@@ -21,7 +32,7 @@ const NL = String.fromCharCode(10)
  */
 export function parseTables(md) {
   const out = []
-  const lines = (md ?? '').split(NL)
+  const lines = normalizeNewlines(md).split(NL)
   const isRow = (l) => /^\s*\|/.test(l ?? '')
   const isDelim = (l) => /^\s*\|[\s:|-]+\|\s*$/.test(l ?? '')
   const cells = (l) =>
@@ -51,7 +62,8 @@ export function parseCodeBlocks(md) {
   const out = []
   const re = /```([a-zA-Z0-9_+-]*)\n([^]*?)```/g
   let m
-  while ((m = re.exec(md ?? '')) !== null) {
+  const src = normalizeNewlines(md)
+  while ((m = re.exec(src)) !== null) {
     out.push({ lang: m[1] || null, code: m[2] })
   }
   return out
@@ -66,6 +78,7 @@ export function parseCodeBlocks(md) {
  */
 export function extractJSON(text) {
   if (!text) return null
+  text = normalizeNewlines(text)
   const fenced = [...text.matchAll(/```(?:json)?\s*\n([^]*?)```/g)].map((m) => m[1])
   for (const c of fenced) {
     try {
@@ -93,7 +106,8 @@ export function parseMath(md) {
   const display = /\$\$([^]*?)\$\$|\\\[([^]*?)\\\]/g
   const inline = /(?<!\$)\$([^$\n]+?)\$(?!\$)|\\\(([^]*?)\\\)/g
   let m
-  while ((m = display.exec(md ?? '')) !== null) out.push({ display: true, tex: (m[1] ?? m[2]).trim() })
-  while ((m = inline.exec(md ?? '')) !== null) out.push({ display: false, tex: (m[1] ?? m[2]).trim() })
+  const tex = normalizeNewlines(md)
+  while ((m = display.exec(tex)) !== null) out.push({ display: true, tex: (m[1] ?? m[2]).trim() })
+  while ((m = inline.exec(tex)) !== null) out.push({ display: false, tex: (m[1] ?? m[2]).trim() })
   return out
 }

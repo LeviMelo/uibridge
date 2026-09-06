@@ -1,98 +1,185 @@
 # uibridge
 
-An OpenAI-compatible endpoint on `localhost`, backed by chat UI sessions in a
-real Chrome window. Built for LitScape: a pipeline that fires many LLM calls
-per run, against subscriptions that are already paid for, without a hard
-daily request cap killing a run at request 40 of 60.
+A local, OpenAI-compatible HTTP API backed by chat UIs you already pay for.
 
-## What it is, precisely
+It replaces moving CSVs and PDFs in and out of a chat window by hand. Your
+pipeline calls `http://127.0.0.1:8477/v1/chat/completions`; a real browser,
+signed in as you, does what your hands would have done, and the answer comes
+back as JSON — with its tables parsed, its LaTeX intact, its citations
+listed, and any file the provider generated already downloaded to disk.
 
-A real Chrome profile, signed in by you, driven by Playwright. Each request
-opens a fresh conversation, types the prompt, waits for the reply to finish,
-and reads it back. No stealth patches, no fingerprint spoofing, no challenge
-solvers - if a provider ever puts a challenge up, you solve it yourself in the
-window, same as any other day.
-
-Requests run **concurrently** across a pool of tabs. A burst of 60 calls runs
-`concurrency` at a time; the rest queue. Nothing is dropped.
-
-## Setup
+No API keys. No per-token billing. No daily request cap beyond the one your
+subscription already has.
 
 ```bash
 npm install
-node login.mjs gemini      # sign in by hand, then close the window
-npm run serve
+node bin/uibridge.mjs login gemini    # sign in once, in a visible window
+node bin/uibridge.mjs serve           # start the API
 ```
-
-## Use from Python
 
 ```python
-from openai import OpenAI
+import json, urllib.request
 
-client = OpenAI(base_url="http://127.0.0.1:8477/v1", api_key="unused")
-
-r = client.chat.completions.create(
-    model="gemini",                      # or "chatgpt"
-    messages=[{"role": "user", "content": "Return JSON: {\"ok\": true}"}],
+req = urllib.request.Request(
+    "http://127.0.0.1:8477/v1/chat/completions",
+    data=json.dumps({
+        "model": "gemini-flash",
+        "messages": [{"role": "user", "content": "Extract the primary outcome as JSON."}],
+        "attachments": [r"C:\corpus\trial_0412.pdf"],
+        "modes": {"thinking": False},
+    }).encode(),
+    headers={"Content-Type": "application/json"},
 )
-print(r.choices[0].message.content)
+body = json.loads(urllib.request.urlopen(req, timeout=900).read())
+
+print(body["choices"][0]["message"]["content"])   # the answer
+ub = body["_uibridge"]
+print(ub["provenance"]["model"]["applied"])       # which model ACTUALLY answered
+print(ub["tables"])                               # tables as header + rows
+print(ub["files"])                                # files it generated, on disk
+print(ub["browsed"], ub["sources"])               # whether it searched, and what it cited
 ```
 
-Attach files with a non-standard `attachments` field (absolute paths):
-
-```python
-r = client.chat.completions.create(
-    model="gemini",
-    messages=[{"role": "user", "content": "Extract the outcomes as JSON."}],
-    extra_body={"attachments": [r"C:\corpus\paper_001.pdf"]},
-)
-```
-
-The response also carries `_uibridge.json` - the first valid JSON block found
-in the reply, already parsed, so you do not have to fence-strip it yourself.
-
-## When it breaks
-
-It will, eventually - providers reshuffle their DOM. Nothing here is subtle:
+## Commands
 
 ```bash
-node calibrate.mjs gemini
+node bin/uibridge.mjs serve                 # the API (default 127.0.0.1:8477)
+node bin/uibridge.mjs login <provider>      # sign in; you type the password, never this tool
+node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
+node bin/uibridge.mjs ask gemini "..."      # one prompt, no server
+node bin/uibridge.mjs capture gemini ["p"]  # record DOM + network for calibration
+npm test                                    # 23 unit tests, no browser, ~0.5s
+python test/live.py                         # live UI-surface suite
 ```
 
-That prints which configured selectors still match and lists live candidates
-for the ones that do not. Fix `config.json`. No code changes.
+## What comes back
 
-## Throughput
+The OpenAI envelope is standard, so existing clients work unchanged.
+Everything provider-specific sits under `_uibridge`, and it is there to be
+honest about what happened rather than to look tidy:
 
-`concurrency` in `config.json` sets how many tabs run at once per service
-(default 6). Each tab is an independent conversation, so:
-
-| concurrency | 60 calls @ ~8s each |
+| field | why it exists |
 |---|---|
-| 1 | ~8 min |
-| 6 | ~80 s |
-| 12 | ~40 s |
+| `provenance.model.applied` / `.verified` | Requested is not applied. A picker can accept a click and not change, so the model that answered is read back from the UI. For a systematic review this is the audit trail. |
+| `markdown` | `true` means the text is the provider's own markdown. `false` means a scraped-DOM fallback, where tables arrive tab-separated and LaTeX is gone. |
+| `tables`, `code_blocks` | Parsed from that markdown, so a pipeline gets rows and source instead of a string to re-parse. |
+| `files` | Files the provider *generated*, downloaded to `downloads/`, with small text payloads inlined. |
+| `browsed`, `sources` | What the UI actually did. Providers routinely answer from their weights despite being told to search. |
+| `usage` | Always zero. Token counts are not observable through a UI, and inventing them would be worse than admitting it. |
 
-Raise it until the provider starts throttling or the machine complains. Tabs
-open lazily, so a run needing two never opens six. Overflow queues rather than
-failing - `/health` shows `tabs`, `busy` and `waiting` per service.
+Errors are typed, so a caller can branch: `401 signed_out`, `503 challenge`,
+`400 invalid_request`, `502 ui_contract` (the UI changed), `502
+provider_error` (retryable), `504 timeout`.
 
-## Honest limits
+## Architecture
 
-- **No token counts.** Not observable through a UI; `usage` is present but zero.
-- **Plan message caps still apply.** This moves your hand, not your quota.
-- **Not for patient-level data.** Published literature is fine. Anything
-  identifiable should go to a local model or a paid API with a
-  no-training guarantee.
+```
+src/core/         provider-agnostic: chrome lifecycle, tab pool, config,
+                  typed errors, async primitives, markdown parsing
+src/providers/    contract.mjs   the seam every provider implements
+                  dom-provider.mjs  the generic request flow, written once
+                  gemini/        selectors.json + its quirks
+                  chatgpt/       same shape, not yet calibrated
+src/transports/   extraction as a swappable concern (dom today)
+src/api/          OpenAI mapping, separate from HTTP handling
+src/tools/        capture: record a real exchange for calibration
+bin/uibridge.mjs  CLI
+```
 
-## Files
+Two things vary independently, and keeping them apart is the point:
 
-| File | Role |
-|---|---|
-| `config.json` | selectors, timeouts, concurrency, port - the only file you edit when a UI changes |
-| `browser.mjs` | persistent-profile plumbing |
-| `login.mjs` | one-time interactive sign-in |
-| `pool.mjs` | tab pool - N concurrent conversations per service |
-| `driver.mjs` | type, submit, wait, read (one tab) |
-| `server.mjs` | OpenAI-compatible HTTP endpoint |
-| `calibrate.mjs` | DOM inspector for repairing selectors |
+- **Actuation** — driving the UI: type, submit, pick a model, attach a file.
+- **Extraction** — reading the answer back. A *transport*.
+
+The goal never changes even when the provider does, so nothing above
+`src/providers/` knows a provider exists. Adding one is a `selectors.json`
+plus one line in `registry.mjs`; the request flow, completion detection,
+uploads, citations and file retrieval are all inherited.
+
+### Adding a provider
+
+```bash
+node bin/uibridge.mjs login chatgpt
+node bin/uibridge.mjs capture chatgpt      # writes DOM + network under testdata/capture/
+```
+
+Fill in `src/providers/<id>/selectors.json` from that capture and set
+`calibrated: true`. Until then the provider refuses to run — deliberately.
+Placeholder selectors that *look* plausible are worse than none: they fail
+somewhere else entirely, as a timeout, and you go hunting in the wrong place.
+
+## What was learned the hard way
+
+Each of these is in the code as a comment next to the thing it explains.
+They are recorded because every one of them cost hours, and all of them look
+like something else when they fail:
+
+- **Attach over CDP, don't `launchPersistentContext`.** Chrome on Windows
+  re-execs itself at startup; Playwright decides the browser died while an
+  orphaned Chrome keeps holding the profile lock.
+- **`innerText` is lossy.** KaTeX keeps no `<annotation>` and no
+  `data-latex`, so rendered maths cannot be recovered from the DOM at all.
+  The message *Copy* button returns canonical markdown. Compare:
+  `t ^ 2 = C Q−(k−1)` against `$\hat{\tau}^2 = \frac{Q-(k-1)}{C}$`.
+- **The clipboard is one buffer for the whole machine.** Two tabs copying at
+  once read each other's answer, which looks exactly like the model replying
+  to the wrong prompt. Hence a process-wide mutex.
+- **A generated file is not a link.** There is no `<a download>` and no
+  `blob:` href anywhere. The bytes sit behind *Open*, which opens a viewer
+  overlay whose toolbar is `div[role=button]` — so
+  `button[aria-label*=Download]` only ever matches the code block's *Download
+  code*. This is exactly how a real generated CSV gets mistaken for "just a
+  code block".
+- **Synthetic `DragEvent`s are ignored.** Tested against nine different
+  targets: zero attachments every time. CDP's `Input.dispatchDragEvent` is a
+  trusted event and takes file paths.
+- **Upload readiness is not the send button.** It stays enabled throughout,
+  so keying off it sends the prompt before the file lands and the model
+  answers about a file it never received.
+- **`isVisible()` must not be given a timeout.** It is an immediate state
+  read; with a timeout, a busy page makes it throw, and a catch that answers
+  "not generating" truncates the answer mid-stream.
+- **`count()` does not auto-wait.** Reading it the instant a page renders
+  reports zero for controls that are merely a few frames late — which
+  misreads a timing race as "the UI changed".
+- **CRLF.** The clipboard returns `\r\n` on Windows, so a newline-anchored
+  fence pattern silently matches nothing and a perfectly good code block
+  reads as absent.
+- **A provider renders its own failures as an ordinary message.** "Sorry,
+  something went wrong" arrives as a short, valid-looking answer. Unchecked,
+  it puts a plausible non-answer into a batch of results.
+- **A rendered composer does not mean signed in.** An anonymous session shows
+  one too, and every request then runs against no account.
+- **`sources-list` is in every response**, so it cannot be the browsing
+  signal; `source-inline-chip` is, and the real URLs live behind *… → View
+  sources*.
+- **`.contains-extensions-response`** marks responses where the provider's
+  code/file tool ran. Gating file lookup on it means ordinary answers pay
+  nothing.
+
+### Why not read the network instead of the DOM?
+
+It was the first thing to try, and it is the right instinct — a structured
+payload beats scraping pixels. For Gemini it does not currently work:
+generation never appears in page-level CDP traffic (checked three ways,
+including `Network.streamResourceContent` and collecting still-in-flight
+requests), there is no service worker, and the visible RPCs are obfuscated
+positional arrays behind an `at` token.
+
+So extraction is a *transport* rather than something baked in, and
+`uibridge capture` records DOM and network side by side and reports whether
+any payload actually contains the answer. When a provider's stream is
+readable, a wire transport slots in without touching anything else.
+
+## Notes
+
+- `.profiles/` holds your live session cookie. It is gitignored because it is
+  as sensitive as a password. This tool never sees or types your credentials —
+  sign-in is you, in a visible window.
+- Verification challenges are yours to clear. The bridge detects one and
+  fails with `503 challenge`; it does not attempt to solve or evade it.
+- Concurrency is per provider (`config.json` → `provider.concurrency`, default
+  2). Every request opens a fresh conversation, so requests cannot see each
+  other's context.
+- There are no fixed sleeps in the request path. Every wait is a condition
+  with a budget; "stopped changing" is a measurement, not padding.

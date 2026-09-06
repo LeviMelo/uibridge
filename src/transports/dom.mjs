@@ -30,6 +30,7 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Mutex, waitFor } from '../core/async.mjs'
 import { ContractError } from '../core/errors.mjs'
+import { normalizeNewlines } from '../core/markdown.mjs'
 
 // Process-wide: the clipboard is a machine resource, not a per-tab one.
 const clipboard = new Mutex()
@@ -93,11 +94,12 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, pollMs
         },
         { timeout: 2500, poll: pollMs, what: 'clipboard to fill' }
       )
-      if (expectLen && text.length < expectLen * 0.5) {
+      const clean = normalizeNewlines(text)
+      if (expectLen && clean.length < expectLen * 0.5) {
         log?.warn(`clipboard returned ${text.length} chars for a ${expectLen}-char response; using rendered text`)
         return null
       }
-      return text
+      return clean
     } catch {
       return null
     }

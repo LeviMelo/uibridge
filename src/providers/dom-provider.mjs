@@ -16,7 +16,7 @@
 
 import { resolve as resolvePath } from 'node:path'
 import { Provider, Capabilities } from './contract.mjs'
-import { ChallengeError, ContractError, SignedOutError, TimeoutError } from '../core/errors.mjs'
+import { BridgeError, ChallengeError, ContractError, SignedOutError, TimeoutError } from '../core/errors.mjs'
 import { waitFor, waitStable } from '../core/async.mjs'
 import { parseCodeBlocks, parseTables } from '../core/markdown.mjs'
 import {
@@ -360,6 +360,19 @@ export class DomProvider extends Provider {
     const copied = await copyMarkdown(page, s, { expectLen: rendered.length, pollMs: cfg.pollMs, log: this.log })
     const text = copied ?? rendered
 
+    // A provider's OWN failure arrives as an ordinary assistant message
+    // ("Sorry, something went wrong. Please try your request again.") and is
+    // otherwise indistinguishable from a real short answer. Returning it
+    // would put a plausible-looking non-answer into a batch of results, so it
+    // becomes a retryable error instead.
+    if (s.errorText && new RegExp(s.errorText, 'i').test(text) && text.length < 400) {
+      throw new BridgeError(`${this.id} returned an error instead of an answer: "${text.trim().slice(0, 120)}"`, {
+        status: 502,
+        code: 'provider_error',
+        retryable: true,
+      })
+    }
+
     const files = s.generatedFile
       ? await downloadGeneratedFiles(page, s.generatedFile, {
           dir: cfg.downloadDir,
@@ -427,7 +440,25 @@ export class DomProvider extends Provider {
     return { browsed, sources }
   }
 
-  async requireContract(page, key, sel) {
-    if (!sel || !(await count(page, sel))) throw new ContractError(this.id, key, sel ?? '(unset)')
+  /**
+   * Assert a selector still matches - but WAIT before concluding it does not.
+   *
+   * count() does not auto-wait. Reading it the instant a fresh conversation
+   * renders reports zero for controls that are merely a few frames late, and
+   * that misreads a timing race as "the UI changed" - the exact confusion
+   * that sent me hunting for three phantom selector bugs in the prototype.
+   * So a contract violation means "absent even after waiting".
+   */
+  async requireContract(page, key, sel, timeout = 8000) {
+    if (!sel) throw new ContractError(this.id, key, '(unset)')
+    try {
+      await waitFor(async () => (await count(page, sel)) || null, {
+        timeout,
+        poll: this.settings.pollMs,
+        what: `${key} to appear`,
+      })
+    } catch {
+      throw new ContractError(this.id, key, sel)
+    }
   }
 }
