@@ -68,11 +68,14 @@ honest about what happened rather than to look tidy:
 | `tables`, `code_blocks` | Parsed from that markdown, so a pipeline gets rows and source instead of a string to re-parse. |
 | `files` | Files the provider *generated*, downloaded to `downloads/`, with small text payloads inlined. |
 | `browsed`, `sources` | What the UI actually did. Providers routinely answer from their weights despite being told to search. |
+| `provider_error` | `true` when the delivered text is the provider's own error notice ("Sorry, something went wrong") rather than an answer. Still a 200, still real content: the UI produced a message and this retrieved it, which is all the bridge promises. Retry-or-skip is your policy, and this flag means you needn't match on prose. |
 | `usage` | Always zero. Token counts are not observable through a UI, and inventing them would be worse than admitting it. |
 
 Errors are typed, so a caller can branch: `401 signed_out`, `503 challenge`,
-`400 invalid_request`, `502 ui_contract` (the UI changed), `502
-provider_error` (retryable), `504 timeout`.
+`400 invalid_request`, `502 ui_contract` (the UI changed), `504 timeout`,
+`501 not_calibrated`. An error is something that stopped a message from being
+retrieved. A message that *was* retrieved always comes back as a 200, even
+when the provider used it to say it failed.
 
 ## Architecture
 
@@ -157,8 +160,10 @@ like something else when they fail:
   fence pattern silently matches nothing and a perfectly good code block
   reads as absent.
 - **A provider renders its own failures as an ordinary message.** "Sorry,
-  something went wrong" arrives as a short, valid-looking answer. Unchecked,
-  it puts a plausible non-answer into a batch of results.
+  something went wrong" arrives as a short, valid-looking answer. It is
+  delivered, because retrieving it is a success by this layer's definition,
+  but flagged as `provider_error` so a batch can tell it apart from a real
+  short answer without matching on prose.
 - **The active model's menu option is `aria-disabled`.** Clicking it can
   never succeed, so a picker label read too early (before it rendered) leads
   straight into a 10s click timeout trying to select the model that was
@@ -207,8 +212,20 @@ UI stayed on Flash-Lite). That is Gemini's bug; the bridge reported it
 correctly rather than attributing the answer to Pro. It is now retried, and
 `strictModel` can turn it into an error.
 
-ChatGPT is next, and it is a calibration job: `uibridge capture chatgpt`,
-fill in its `selectors.json`, set `calibrated: true`.
+### What works today
+
+**Gemini only.** Signed in as you, one conversation per request: send a
+prompt, attach CSVs and PDFs, pick `gemini-flash` / `gemini-flash-lite` /
+`gemini-pro`, toggle extended thinking, get markdown back with tables and
+code parsed, any file it generated already on disk, and its citations when
+it actually searched. That is the whole working surface.
+
+**ChatGPT does not work.** There is a directory for it holding guessed
+selectors and `calibrated: false`. It is not advertised by `/v1/models`, it
+cannot be called by accident, and asking for it returns `501 not_calibrated`
+with instructions. It is a placeholder for the next piece of work, nothing
+more — `uibridge capture chatgpt`, fill in its `selectors.json` from what the
+capture shows, set `calibrated: true`.
 
 ## Notes
 

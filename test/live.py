@@ -307,7 +307,10 @@ def t_models_endpoint():
     with urllib.request.urlopen(f"{BASE}/v1/models", timeout=15) as r:
         ids = [m["id"] for m in json.loads(r.read())["data"]]
     need = {"gemini-flash", "gemini-flash-lite", "gemini-pro"}
-    check("/v1/models advertises real ids", need.issubset(set(ids)), str(ids))
+    # And it must NOT advertise a provider whose selectors are still
+    # placeholders: an id here is a promise that calling it works.
+    ok = need.issubset(set(ids)) and "chatgpt" not in ids
+    check("/v1/models advertises only calibrated ids", ok, str(ids))
 
 
 TESTS = [

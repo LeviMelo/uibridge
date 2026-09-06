@@ -115,13 +115,16 @@ export class Session {
     const started = Date.now()
 
     // Retry only failures a second attempt can genuinely fix, and only once:
-    //   provider_error  the provider's own "something went wrong" message
     //   compose_failed  the prompt never reached the composer
     //   submit_failed   it was typed but the send did not take
-    // Timeouts are NOT retried - the model was working, and repeating a
-    // ten-minute wait costs the caller far more than it can recover. Each
-    // attempt gets a fresh tab, because withTab discards a failed one.
-    const RETRYABLE = new Set(['provider_error', 'compose_failed', 'submit_failed'])
+    // Both mean the turn never happened, so retrying costs nothing and can
+    // only help. Timeouts are NOT retried - the model was working, and
+    // repeating a ten-minute wait costs the caller far more than it can
+    // recover. Nor is a "something went wrong" turn: that is a message the
+    // UI produced and we retrieved, so it is delivered with
+    // `provider_error: true` and the caller decides. Each attempt gets a
+    // fresh tab, because withTab discards a failed one.
+    const RETRYABLE = new Set(['compose_failed', 'submit_failed'])
     return retry(
       () => this.#attempt({ prompt, files: resolved, model, modes, rid, log, started }),
       {

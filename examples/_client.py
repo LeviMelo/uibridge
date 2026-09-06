@@ -90,6 +90,11 @@ def call(prompt, model="gemini", attachments=None, modes=None, timeout=900):
         # unavailable), or "rendered" (innerText, structure lost).
         "extraction": ub.get("extraction"),
         "lossy_math": ub.get("lossy_math", False),
+        # True when the UI answered with its own error notice ("Sorry,
+        # something went wrong") instead of an answer. Still a 200 and still
+        # real content - the message existed and was retrieved. Branch on
+        # this rather than matching on the prose.
+        "provider_error": ub.get("provider_error", False),
         "tables": ub.get("tables") or [],
         "code_blocks": ub.get("code_blocks") or [],
         # Files the PROVIDER generated, already downloaded to disk.

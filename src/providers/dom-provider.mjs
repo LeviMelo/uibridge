@@ -514,16 +514,17 @@ export class DomProvider extends Provider {
     }
 
     // A provider's OWN failure arrives as an ordinary assistant message
-    // ("Sorry, something went wrong. Please try your request again.") and is
-    // otherwise indistinguishable from a real short answer. Returning it
-    // would put a plausible-looking non-answer into a batch of results, so it
-    // becomes a retryable error instead.
-    if (s.errorText && new RegExp(s.errorText, 'i').test(text) && text.length < 400) {
-      throw new BridgeError(`${this.id} returned an error instead of an answer: "${text.trim().slice(0, 120)}"`, {
-        status: 502,
-        code: 'provider_error',
-        retryable: true,
-      })
+    // ("Sorry, something went wrong. Please try your request again.").
+    //
+    // That is still a message the UI produced and this bridge retrieved, so
+    // it is DELIVERED, not thrown: whether a "something went wrong" turn is
+    // fatal, worth retrying, or simply logged is the caller's policy, not
+    // ours. It is flagged so that policy can be written without regex-ing
+    // the text downstream.
+    const providerError =
+      !!s.errorText && new RegExp(s.errorText, 'i').test(text) && text.length < 400
+    if (providerError) {
+      this.log?.warn(`the UI answered with its own error message: "${text.trim().slice(0, 90)}"`)
     }
 
     const files = s.generatedFile
@@ -545,6 +546,9 @@ export class DomProvider extends Provider {
       extraction,
       markdown: extraction !== 'rendered',
       lossy_math: lossyMath,
+      // The text is the provider's own error notice rather than an answer.
+      // Delivered anyway; the caller decides what that means.
+      provider_error: providerError,
       tables: parseTables(text),
       code_blocks: parseCodeBlocks(text),
       files,

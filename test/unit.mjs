@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { parseTables, parseCodeBlocks, extractJSON, parseMath } from '../src/core/markdown.mjs'
 import { Mutex, retry, waitFor, waitStable } from '../src/core/async.mjs'
 import { flattenMessages, readAttachments, readModes } from '../src/api/openai.mjs'
-import { resolveModel, modelCatalogue, providerIds } from '../src/providers/registry.mjs'
+import { resolveModel, modelCatalogue, providerIds, providerClass } from '../src/providers/registry.mjs'
 import { RequestError, SignedOutError, ContractError } from '../src/core/errors.mjs'
 
 const NL = String.fromCharCode(10)
@@ -167,17 +167,20 @@ test('waitStable: a long answer that merely mentions a placeholder word is accep
 })
 
 test('retry: retries only what a second attempt can fix', async () => {
-  // The policy matters as much as the mechanism. A provider's own transient
-  // failure is worth one more go; a timeout is not - the model was working,
-  // and repeating a ten-minute wait costs more than it recovers.
-  const RETRYABLE = new Set(['provider_error', 'compose_failed', 'submit_failed'])
+  // The policy matters as much as the mechanism. A turn that never left the
+  // composer is worth one more go; a timeout is not - the model was working,
+  // and repeating a ten-minute wait costs more than it recovers. A
+  // "something went wrong" reply is not in the set either: it is a message
+  // the UI produced, so it is delivered and flagged, never retried behind
+  // the caller's back.
+  const RETRYABLE = new Set(['compose_failed', 'submit_failed'])
   const isRetryable = (e) => RETRYABLE.has(e.code)
 
   let calls = 0
   const recovered = await retry(
     async () => {
       calls++
-      if (calls === 1) throw Object.assign(new Error('went wrong'), { code: 'provider_error' })
+      if (calls === 1) throw Object.assign(new Error('never typed'), { code: 'compose_failed' })
       return 'second attempt'
     },
     { attempts: 2, isRetryable }
@@ -229,9 +232,15 @@ test('readAttachments / readModes validate shape', () => {
   assert.throws(() => readModes({ modes: [] }), RequestError)
 })
 
-test('registry: providers expose themselves as models', () => {
+test('registry: only calibrated providers are advertised', () => {
+  // /v1/models is a promise that an id works. A provider still on
+  // placeholder selectors must not appear: a caller would pick it, get a
+  // 501, and conclude the bridge is broken rather than unfinished.
   const ids = modelCatalogue().map((m) => m.id)
-  for (const p of providerIds) assert.ok(ids.includes(p), `${p} should be a model id`)
+  for (const p of providerIds) {
+    const calibrated = providerClass(p).selectors?.calibrated !== false
+    assert.equal(ids.includes(p), calibrated, `${p} listed but calibrated=${calibrated}`)
+  }
   assert.ok(ids.includes('gemini-flash'))
 })
 

@@ -89,6 +89,13 @@ export function completionResponse({ modelId, result, provider }) {
       // True when maths was rendered but its source is not in the DOM, so the
       // formula is glyphs rather than LaTeX. Never silently pretended.
       lossy_math: result.lossy_math ?? false,
+      // TRUE when the delivered text is the provider's own error notice
+      // ("Sorry, something went wrong...") rather than an answer. It is
+      // still returned as content and still a 200: the UI produced a message
+      // and the bridge retrieved it, which is all this layer promises. What
+      // to do about it - retry, skip the row, log it - is the caller's
+      // policy, and this flag is so that policy needn't match on prose.
+      provider_error: result.provider_error ?? false,
       tables: result.tables,
       code_blocks: result.code_blocks,
       // Files the PROVIDER generated, already on disk.

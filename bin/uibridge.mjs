@@ -106,8 +106,13 @@ async function doctor(only) {
     const sel = Class.selectors
     console.log(`\n== ${id} ==`)
     if (sel.calibrated === false) {
-      console.log('  selectors : NOT CALIBRATED (placeholders - see selectors.json)')
-      bad++
+      // A scaffolded provider is a STATE, not a fault: it is not advertised
+      // by /v1/models and cannot be called by accident. Counting it as a
+      // failure made `doctor` exit non-zero on a perfectly healthy install,
+      // which is exactly the kind of false alarm that gets a check ignored.
+      console.log('  selectors : not calibrated yet - scaffold only, not advertised')
+      console.log(`              to bring it up: uibridge capture ${id}`)
+      if (only) bad++
       continue
     }
     let session

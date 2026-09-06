@@ -24,6 +24,12 @@ export function providerClass(id) {
 export function modelCatalogue() {
   const out = []
   for (const C of CLASSES) {
+    // An uncalibrated provider is NOT advertised. /v1/models is a promise
+    // that these ids work; listing one whose selectors are still
+    // placeholders means a caller picks it, gets a 501, and reasonably
+    // concludes the bridge is broken. It exists in the tree, not in the
+    // catalogue - `uibridge doctor` is where you see it and its state.
+    if (C.selectors?.calibrated === false) continue
     out.push({ id: C.id, provider: C.id, model: null })
     for (const model of Object.keys(C.selectors?.models ?? {})) {
       out.push({ id: model, provider: C.id, model })
