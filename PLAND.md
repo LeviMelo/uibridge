@@ -670,3 +670,80 @@ Signed-out HTTP acceptance was also measured on 2026-09-06 after clearing
 both dedicated profiles: `gemini-flash` returned `401 signed_out` in 985 ms;
 `chatgpt-5.6-instant` returned `401 signed_out` in 3.9 s, with the anonymous
 bundle named as evidence. Neither prompt reached a chatbot.
+
+---
+
+## 11. Thread export and thread-wide file retrieval (2026-09-06, phase 3)
+
+The chat UIs virtualize history: a 34-message ChatGPT thread keeps about six
+messages in the document. Reading a thread is therefore a *walk*, and the
+walk is provider-generic (`src/transports/thread-dom.mjs`); what is per
+provider is only the identity contract, in `thread.export` of its
+`selectors.json`. Both contracts are measured, not guessed:
+
+| provider | messageNode | identity |
+|---|---|---|
+| ChatGPT | `[data-message-author-role][data-message-id]` | `data-message-id` (uuid), role and `data-message-model-slug` on the same node; a sent file's name is in `div.overflow-hidden > div.truncate.font-semibold` inside the message node |
+| Gemini | `user-query, model-response` | `id` on a descendant `message-content[id]`; a user turn borrows the id of the message after it (`pairId: "next"`), role from element name, screen-reader labels pruned via `textExclude` |
+
+### What the walk had to get right
+
+1. **Hydrate upward first.** History arrives as the top comes into view, so
+   one jump to zero proves nothing. Repeat until neither scroll height nor
+   message count changes, twice in a row.
+2. **Never read a scroller that is still settling.** A reading taken right
+   after a jump can be showing the messages the scroller came *from*. This
+   shipped once: a jump to the top returned the thread's *last three*
+   messages, and first-sight ordering then put the end of the conversation
+   in front of the beginning. Readings now wait for the mounted set and the
+   offset to stop changing.
+3. **Order is DOM order, stitched.** Each reading is a contiguous slice in
+   document order; unknown messages are spliced in after the last known
+   message of that same reading, never appended in discovery order.
+4. **Verify, then claim.** The assembled order is checked against every
+   reading taken. `order_verified: false` (and `complete: false`) is
+   reported rather than serving a scrambled transcript. A thread export that
+   silently reorders a conversation is worse than one that fails, because a
+   meta-analysis built on it cannot tell.
+
+### Resuming a thread: two rules learned by breaking them
+
+- **Sending must not be gated on reading.** The resume path waited for a
+  thread's previous messages to render before submitting - which is exactly
+  what the rate-limit lock removes (it keeps accepting new messages while it
+  stops serving old conversations). The result was the user's file attached
+  to the composer and the turn abandoned unsent. The wait is now advisory:
+  `provenance.history` is `loaded` or `not_loaded`, and the send proceeds.
+- **A visible composer is not proof of arrival.** A `/c/<id>` load that
+  lands on a blank new chat has one too, so messages were being written into
+  brand new conversations - misattributed, and manufacturing precisely the
+  fresh chats that trip the rate limiter. `resumeThread` now verifies the
+  thread id it landed on and refuses with `503 thread_unavailable`.
+
+### Files, both directions
+
+`send` and `download` are the only two file operations, and no format
+specific logic exists anywhere. An export names sent files (`attachments`)
+and generated files (`file_controls`); `--files` / `"files": true` retrieves
+the generated ones by scrolling each message back into view and clicking its
+control, reading the bytes off the wire (the app's bearer token is never
+touched). Verified live: a file generated 25 messages earlier was recovered
+byte-exact.
+
+### Live acceptance (2026-09-06)
+
+Thread `6a9ddcb5…` grown to 34 messages through one persistent tab
+(8-22 s/turn), then exported: `complete: true`, 34/34 ordered, stable ids,
+`order_verified: true` across 19 readings, `mounted_at_end: 6`, strict
+user/assistant alternation, markers `VBIG_01…VBIG_08` in sequence, sent and
+generated files both present, and the same export served over
+`POST /v1/threads/export`. Gemini exports through the same code path with
+its own contract.
+
+### Still open
+
+- Gemini's `notices` block is unmeasured; its rate-limit text is unknown.
+- Gemini answers still cannot be read off the wire (section 5.9).
+- ChatGPT's `authCookiePattern` remains an unobserved guess.
+- Latency is dominated by cold page loads in one-shot mode; the persistent
+  `chat` tab is the fast path and a warm pool would generalise it.

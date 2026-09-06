@@ -62,12 +62,13 @@ uibridge chat chatgpt --thread=<native-id>  # persistent same-tab REPL
 uibridge threads [provider] --json           # native threads recorded locally
 uibridge thread <provider> <native-id> --json # turns and sent/downloaded files
 uibridge export chatgpt <native-id> --json   # active-branch history export
+uibridge export chatgpt <native-id> --files  # ...and download every file it generated
 node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
 node bin/uibridge.mjs ask chatgpt "..."     # one prompt, no server
 node bin/uibridge.mjs ask chatgpt --file=paper.pdf --model=chatgpt-5.6-high "..."
 node bin/uibridge.mjs doctor chatgpt --anon # prove signed-OUT is detected (throwaway profile)
 node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabulary + network
-npm test                                    # 68 unit tests, no browser, ~2s
+npm test                                    # 79 unit tests, no browser, ~2s
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -95,6 +96,30 @@ honest about what happened rather than to look tidy:
 | `browsed`, `sources` | What the UI actually did. Providers routinely answer from their weights despite being told to search. |
 | `provider_error` | `true` when the delivered text is the provider's own error notice ("Sorry, something went wrong") rather than an answer. Still a 200, still real content: the UI produced a message and this retrieved it, which is all the bridge promises. Retry-or-skip is your policy, and this flag means you needn't match on prose. |
 | `usage` | Always zero. Token counts are not observable through a UI, and inventing them would be worse than admitting it. |
+
+### Exporting a whole thread
+
+`uibridge export <provider> <native-id>` (or `POST /v1/threads/export` with
+`{"provider", "thread_id", "files"}`) returns every message on the thread's
+active branch, in order, with `attachments` naming files that were **sent**
+and `file_controls` naming files the thread **generated**. `--files` (or
+`"files": true`) also retrieves those generated files, scrolling each
+message back into view to reach its download control.
+
+These chat UIs virtualize their history: on a 34-message thread only six
+messages exist in the document at any moment, so an export is a walk, and
+`evidence` says how well that walk went rather than asking you to trust it:
+
+| field | meaning |
+|---|---|
+| `reached_top`, `reached_bottom` | Both ends were actually observed. History arrives while scrolling, so the top is confirmed by two quiet passes, not by one jump to zero. |
+| `message_count`, `ordered_count` | Messages found, and messages the walk could place. A message that was seen but never placed is still exported, flagged `order_unknown`. |
+| `stable_ids` | Identity came from the provider's own message ids. When false, identity was inferred from content and two identical messages collapse into one. |
+| `readings`, `order_verified` | Each reading sees a contiguous slice of the thread in document order. `order_verified` means the assembled order contradicts none of them. False means the transcript is not faithful — and it says so instead of pretending. |
+| `mounted_at_end` | How many messages the page was holding when the walk finished. Far below `message_count` is the virtualization being handled. |
+
+`complete` is true only when both ends were reached, every message was
+placed, and the order verified.
 
 Errors are typed, so a caller can branch: `401 signed_out`, `503 challenge`,
 `400 invalid_request`, `502 ui_contract` (the UI changed), `504 timeout`,

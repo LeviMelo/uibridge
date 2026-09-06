@@ -350,7 +350,7 @@ export class Session {
   }
 
   /** Export the complete active branch of one provider-native thread. */
-  async exportThread(threadId) {
+  async exportThread(threadId, { files = false } = {}) {
     if (!threadId) throw new RequestError('thread id is required')
     return this.#pool.withTab(async (page) => {
       const provider = this.#provider
@@ -363,6 +363,10 @@ export class Session {
       const exported = await provider.exportThread(page, threadId)
       const actual = await provider.currentThread(page)
       if (actual !== threadId) throw new BridgeError(`${this.id}: export navigated away from the requested thread`, { status: 502, code: 'thread_mismatch' })
+      // Retrieving the thread's files is opt-in: it clicks every download
+      // control the thread ever rendered, and a caller who only wants the
+      // text should not pay for that in requests to the site.
+      if (files) exported.files = await provider.downloadThreadFiles(page, exported.messages)
       return exported
     })
   }

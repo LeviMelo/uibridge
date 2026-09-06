@@ -28,8 +28,9 @@ import {
   readRenderedText,
 } from '../transports/dom.mjs'
 import { reconstructMarkdown } from '../transports/markdown-dom.mjs'
-import { sweepThread } from '../transports/thread-dom.mjs'
+import { sweepThread, mountMessage } from '../transports/thread-dom.mjs'
 import { WireTap } from '../transports/wire.mjs'
+import { captureDownload } from '../transports/files-wire.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
 const cdpSessions = new WeakMap()
@@ -301,6 +302,76 @@ export class DomProvider extends Provider {
     return Promise.all(Array.from({ length: n }, (_, i) =>
       readRenderedText(page, { blocks: this.sel.responseBlocks, text: this.sel.responseText }, i)
     ))
+  }
+
+  /**
+   * Retrieve files a thread generated at any point in its past.
+   *
+   * Downloading only works today on the turn that produced the file, which
+   * covers "ask for a CSV and get it" but not "here is a six-week thread,
+   * give me everything it made". The controls are the same ones; what is
+   * missing is that a message far up the thread is not in the document at
+   * all until it is scrolled back, and that its answer text is long gone
+   * from memory. Both are handled here, and every failure is reported
+   * against the message it belongs to rather than dropped.
+   */
+  async downloadThreadFiles(page, messages, { onFile } = {}) {
+    const g = this.sel.generatedFile
+    const contract = this.sel.thread?.export
+    if (!g?.control || !contract?.idAttr) return { files: [], skipped: 'this provider has no measured download control' }
+
+    const wanted = messages.filter((m) => m.file_controls?.length && m.id)
+    if (!wanted.length) return { files: [] }
+
+    const tap = await WireTap.attach(page)
+    const taken = new Set()
+    const files = []
+    for (const message of wanted) {
+      const selector = `[${contract.idAttr}="${message.id.replace(/"/g, '\\"')}"]`
+      const mounted = await mountMessage(page, { fileControl: g.control, ...contract }, selector, {
+        settleMs: this.settings.threadSettleMs ?? 400,
+      })
+      if (!mounted) {
+        for (const name of message.file_controls) {
+          files.push({ name, message_id: message.id, error: 'the message holding this file could not be brought back into view' })
+        }
+        continue
+      }
+      const host = page.locator(selector).first()
+      const controls = host.locator(g.control)
+      const count = await controls.count().catch(() => 0)
+      for (let i = 0; i < message.file_controls.length; i++) {
+        const fallbackName = message.file_controls[i] || `download-${i + 1}.bin`
+        if (i >= count) {
+          files.push({ name: fallbackName, message_id: message.id, error: 'the download control is no longer rendered on this message' })
+          continue
+        }
+        try {
+          const file = await captureDownload(
+            tap,
+            () => this.clickThrough(controls.nth(i), { attempts: 2, timeout: 4000, what: `the ${fallbackName} download link` }),
+            {
+              contentPattern: g.contentPattern,
+              metaPattern: g.metadataPattern,
+              dir: this.settings.downloadDir,
+              timeoutMs: this.settings.fileWaitMs,
+              fallbackName,
+              taken,
+              log: this.log,
+            }
+          )
+          files.push({ ...file, message_id: message.id })
+          onFile?.(file)
+        } catch (e) {
+          this.log?.warn(
+            `${fallbackName}: could not retrieve the file - ${e.message.split('\n')[0]}` +
+              `; the page's recent requests were: ${tap.seen().slice(-8).join(', ')}`
+          )
+          files.push({ name: fallbackName, message_id: message.id, error: e.message.split('\n')[0] })
+        }
+      }
+    }
+    return { files }
   }
 
   /**

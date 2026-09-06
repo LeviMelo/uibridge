@@ -422,3 +422,28 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
     complete: reachedTop && reachedBottom && placed === messages.length && disagreements === 0,
   }
 }
+
+/**
+ * Bring one message back into the DOM and return true when it is mounted.
+ *
+ * Virtualization is not only an export problem: a file generated forty
+ * messages ago has no download control in the document at all until its
+ * message is scrolled back into view. Walking down from the top in strides
+ * is the same motion the sweep uses, so it costs nothing new to reuse it.
+ */
+export async function mountMessage(page, contract, selector, { settleMs = 300, maxSteps = 400 } = {}) {
+  const step = (action, value) => page.evaluate(STEP, { contract, action, value })
+  const present = () => page.locator(selector).count().then((n) => n > 0).catch(() => false)
+
+  if (await present()) return true
+  let last = await step('top')
+  await sleep(settleMs)
+  for (let i = 0; i < maxSteps; i++) {
+    if (await present()) return true
+    if (last.scroll.top >= last.scroll.max - 2) return present()
+    const stride = Math.max(200, Math.floor(last.scroll.viewport * 0.66))
+    last = await step('to', last.scroll.top + stride)
+    await sleep(settleMs)
+  }
+  return present()
+}

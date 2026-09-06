@@ -10,6 +10,9 @@ import { BridgeError, RequestError } from '../core/errors.mjs'
 import { loadConfig } from '../core/config.mjs'
 import { logger } from '../core/log.mjs'
 import { Session } from '../session.mjs'
+import { listThreads } from '../core/ledger.mjs'
+import { ROOT } from '../core/config.mjs'
+import { resolve } from 'node:path'
 import { modelCatalogue, providerIds, resolveModel } from '../providers/registry.mjs'
 import {
   completionResponse,
@@ -89,6 +92,30 @@ export function createApp(cfg = loadConfig()) {
       for (const [id, s] of sessions) out[id] = s.capabilities
       return { open: out, providers: providerIds }
     },
+
+    /**
+     * Export one thread over HTTP.
+     *
+     * Addressed by body rather than by path because a thread id is the
+     * provider's own uuid and this dispatcher matches whole paths; inventing
+     * a parser for one route would be more moving parts than the feature.
+     * `files: true` also retrieves everything the thread generated, which
+     * costs a click and a download per file - so it stays opt-in here too.
+     */
+    'POST /v1/threads/export': async (body) => {
+      const id = body.provider ?? cfg.defaultProvider
+      if (!providerIds.includes(id)) {
+        throw new RequestError(`Unknown provider "${id}". Known: ${providerIds.join(', ')}`)
+      }
+      const threadId = body.thread_id ?? body.threadId
+      if (!threadId) throw new RequestError('thread_id is required')
+      const session = await sessionFor(id)
+      return session.exportThread(threadId, { files: body.files === true })
+    },
+
+    'GET /v1/threads': async () => ({
+      threads: await listThreads(resolve(ROOT, cfg.ledgerDir), null),
+    }),
 
     'POST /v1/chat/completions': async (body) => {
       const prompt = flattenMessages(body.messages)

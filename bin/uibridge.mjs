@@ -60,6 +60,7 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge chat <provider>             persistent same-tab conversation
                                       [--thread=id] [--model=id] [--jsonl]
   uibridge export <provider> <id>      export a complete active thread branch
+  uibridge export <provider> <id> --files  ...and download every file it generated
                                       [--output=path] [--json]
   uibridge capture <provider> ["p"]   record DOM + network for one exchange
                                       [--continue] reuses the open calibration thread
@@ -404,12 +405,19 @@ async function exportThread(id, args) {
   const requestedPath = args.find((a) => a.startsWith('--output='))?.slice(9)
   const session = await Session.open(id, { cfg })
   try {
-    const data = await session.exportThread(threadId)
+    const data = await session.exportThread(threadId, { files: args.includes('--files') })
     const path = resolve(requestedPath ?? resolve(ROOT, cfg.exportDir, id, `${threadId}.json`))
     mkdirSync(resolve(path, '..'), { recursive: true })
     writeFileSync(path, JSON.stringify(data, null, 2), 'utf8')
     if (json) console.log(JSON.stringify({ path, ...data }, null, 2))
-    else console.log(`${id} thread ${threadId}: ${data.messages.length} messages, complete=${data.complete}\n${path}`)
+    else {
+      console.log(`${id} thread ${threadId}: ${data.messages.length} messages, complete=${data.complete}`)
+      for (const f of data.files?.files ?? []) {
+        console.log(f.error ? `  file ${f.name}: ${f.error}` : `  file ${f.name} -> ${f.path} (${f.bytes} bytes)`)
+      }
+      if (data.files?.skipped) console.log(`  files: ${data.files.skipped}`)
+      console.log(path)
+    }
   } finally { await session.close() }
 }
 
