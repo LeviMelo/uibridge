@@ -17,6 +17,10 @@ testdata/dom/
 testdata/net/
 testdata/downloads/
 testdata/capture/
+# Recon dumps hold RAW RESPONSE BODIES from a signed-in session, which means
+# access tokens and conversation text. They are evidence to read locally,
+# never something to commit.
+testdata/recon/
 
 # scratch
 _*.mjs
