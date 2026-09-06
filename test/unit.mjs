@@ -16,6 +16,7 @@ import { flattenMessages, readAttachments, readModes } from '../src/api/openai.m
 import { resolveModel, modelCatalogue, providerIds, providerClass } from '../src/providers/registry.mjs'
 import { RequestError, SignedOutError, ContractError } from '../src/core/errors.mjs'
 import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
+import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse-openai.mjs'
 
 const NL = String.fromCharCode(10)
 const lines = (...l) => l.join(NL)
@@ -335,4 +336,135 @@ test('session: the message names the evidence AND the command', () => {
   assert.match(msg, /never sees or types your password/)
   // And it must say WHY refusing beats proceeding.
   assert.match(msg, /weaker model/)
+})
+
+// --- the ChatGPT wire format -----------------------------------------------
+// Shapes taken from a real recorded exchange (testdata/recon), rebuilt here
+// without the JWT and the account's custom instructions that the live stream
+// also carries.
+
+const LF = String.fromCharCode(10)
+const PUA200 = String.fromCharCode(0xe200)
+const PUA201 = String.fromCharCode(0xe201)
+const PUA202 = String.fromCharCode(0xe202)
+const sse = (frames) =>
+  frames.map((f) => (f.event ? `event: ${f.event}${LF}` : '') + `data: ${f.data}${LF}${LF}`).join('')
+
+const msg = (role, content_type, parts, extra = {}) =>
+  JSON.stringify({ message: { id: `m-${role}-${parts[0]?.slice(0, 4) ?? 0}`, author: { role }, content: { content_type, parts }, metadata: extra } })
+
+test('wire: a delta with no o/p inherits both from the one before', () => {
+  // The entire compression scheme. Treating each frame as self-describing
+  // recovered 29 characters of a real 2KB answer and looked like it worked.
+  const raw = sse([
+    { event: 'delta_encoding', data: JSON.stringify('v1') },
+    { event: 'delta', data: JSON.stringify({ p: '', o: 'add', c: 0, v: JSON.parse(msg('user', 'text', ['hi'])) }) },
+    { event: 'delta', data: JSON.stringify({ c: 1, v: JSON.parse(msg('assistant', 'text', [''], { model_slug: 'gpt-5-6-thinking' })) }) },
+    { event: 'delta', data: JSON.stringify({ o: 'append', p: '/message/content/parts/0', v: '| PMID |' }) },
+    { event: 'delta', data: JSON.stringify({ v: ' Drug |' }) },
+    { event: 'delta', data: JSON.stringify({ v: ' n |' }) },
+    { data: '[DONE]' },
+  ])
+  const r = decodeDeltaStream(raw)
+  assert.equal(r.text, '| PMID | Drug | n |')
+  assert.equal(r.model, 'gpt-5-6-thinking')
+  assert.equal(r.finished, true)
+})
+
+test('wire: a patch batch applies every op, and patch mode persists', () => {
+  // Taken from the recorded stream: once a turn starts sending patches it
+  // keeps sending them, and the following frames inherit o:"patch" and carry
+  // further op ARRAYS rather than a bare string. Assuming a string here
+  // (which is what intuition suggests) silently drops the rest of the answer.
+  const part = '/message/content/parts/0'
+  const raw = sse([
+    { data: JSON.stringify({ p: '', o: 'add', c: 0, v: JSON.parse(msg('assistant', 'text', [''])) }) },
+    { data: JSON.stringify({ o: 'append', p: part, v: 'a' }) },
+    { data: JSON.stringify({ o: 'patch', p: '', v: [{ p: part, o: 'append', v: 'b' }] }) },
+    { data: JSON.stringify({ v: [{ p: part, o: 'append', v: 'c' }] }) },
+    { data: JSON.stringify({ v: [{ p: part, o: 'append', v: 'd' }, { p: '/message/metadata/finished', o: 'replace', v: true }] }) },
+  ])
+  assert.equal(decodeDeltaStream(raw).text, 'abcd')
+})
+
+test('wire: the answer is assistant TEXT, not a thought or a tool call', () => {
+  // One turn carries user, several system, tool and assistant-reasoning
+  // channels. "The last assistant message" returns reasoning, not the answer.
+  const raw = sse([
+    { data: JSON.stringify({ p: '', o: 'add', c: 0, v: JSON.parse(msg('assistant', 'text', ['the answer'])) }) },
+    { data: JSON.stringify({ c: 1, v: JSON.parse(msg('assistant', 'thoughts', ['let me think'])) }) },
+    { data: JSON.stringify({ c: 2, v: JSON.parse(msg('tool', 'text', ['search results'])) }) },
+    { data: JSON.stringify({ c: 3, v: JSON.parse(msg('system', 'text', ['policy'])) }) },
+  ])
+  assert.equal(decodeDeltaStream(raw).text, 'the answer')
+})
+
+test('wire: citation markers are removed whole, not just their sentinels', () => {
+  // Stripping only the sentinel characters leaves "citeturn0search1"
+  // sitting inside a table cell, which then travels into a CSV as if the
+  // model had written it.
+  const marker = PUA200 + 'cite' + PUA202 + 'turn0search1' + PUA201
+  const { text, marks } = stripMarkers('60 ' + marker + ' patients')
+  assert.equal(text, '60  patients')
+  assert.equal(marks.length, 1)
+  assert.equal(marks[0].index, 3)
+})
+
+test('wire: a cited source keeps its position in the CLEAN text', () => {
+  const marker = PUA200 + 'cite' + PUA202 + 'turn0search1' + PUA201
+  const raw = sse([
+    {
+      data: JSON.stringify({
+        p: '', o: 'add', c: 0,
+        v: JSON.parse(msg('assistant', 'text', ['n = 60 ' + marker], {
+          content_references: [{ matched_text: marker, url: 'https://pubmed.example/1', title: 'Trial' }],
+        })),
+      }),
+    },
+  ])
+  const r = decodeDeltaStream(raw)
+  assert.equal(r.text, 'n = 60 ')
+  assert.equal(r.citations.length, 1)
+  // Offsets into the raw text would point past the end once stripped.
+  assert.equal(r.citations[0].at, 7)
+  assert.equal(r.citations[0].url, 'https://pubmed.example/1')
+})
+
+test('wire: a marker whose source was withheld is counted, not forgotten', () => {
+  // Observed live: the model cited three sources and the server marked every
+  // reference invalid with no URL. The answer claimed support it did not
+  // deliver, and a caller weighing the text deserves to know.
+  const marker = PUA200 + 'cite' + PUA202 + 'turn638403search2' + PUA201
+  const raw = sse([
+    {
+      data: JSON.stringify({
+        p: '', o: 'add', c: 0,
+        v: JSON.parse(msg('assistant', 'text', ['60 ' + marker], {
+          content_references: [{ matched_text: marker, invalid: true, safe_urls: [], refs: [] }],
+        })),
+      }),
+    },
+  ])
+  const r = decodeDeltaStream(raw)
+  assert.equal(r.citations.length, 0)
+  assert.equal(r.unresolved_markers, 1)
+})
+
+test('wire: a half-written final frame does not throw', () => {
+  // The same decoder runs against a stream that is still open, so the last
+  // line is routinely half a JSON object.
+  const raw =
+    sse([{ data: JSON.stringify({ p: '', o: 'add', c: 0, v: JSON.parse(msg('assistant', 'text', ['partial'])) }) }]) +
+    'data: {"o":"append","p":"/message/con'
+  const r = decodeDeltaStream(raw)
+  assert.equal(r.text, 'partial')
+  assert.equal(r.malformed, 1)
+  assert.equal(r.finished, false)
+})
+
+test('wire: SSE framing survives CRLF', () => {
+  const CR = String.fromCharCode(13)
+  const raw = `event: delta${CR}${LF}data: {"v":1}${CR}${LF}${CR}${LF}`
+  assert.equal(parseSSE(raw).length, 1)
+  assert.equal(parseSSE(raw)[0].event, 'delta')
 })
