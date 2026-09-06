@@ -10,7 +10,7 @@ import { attachBrowser } from './core/chrome.mjs'
 import { TabPool } from './core/pool.mjs'
 import { loadConfig, portFor, providerSettings } from './core/config.mjs'
 import { logger, requestId } from './core/log.mjs'
-import { RequestError, SignedOutError } from './core/errors.mjs'
+import { BridgeError, RequestError, SignedOutError } from './core/errors.mjs'
 import { retry } from './core/async.mjs'
 import { providerClass, providerIds } from './providers/registry.mjs'
 
@@ -145,7 +145,17 @@ export class Session {
       // Model and modes first: on some providers they cannot be changed once
       // a thread has started, and provenance must describe the turn we send.
       const provenance = { model: null, modes: {}, final_state: null }
-      if (model) provenance.model = await provider.selectModel(page, model)
+      if (model) {
+        provenance.model = await provider.selectModel(page, model)
+        if (this.#settings.strictModel && provenance.model.verified === false) {
+          throw new BridgeError(
+            `${this.id}: asked for "${model}" but the UI reports ` +
+              `"${provenance.model.applied ?? 'unknown'}". Refusing rather than answering ` +
+              'with a model the caller did not request (strictModel is on).',
+            { status: 502, code: 'model_not_applied', retryable: true }
+          )
+        }
+      }
       for (const [key, on] of Object.entries(modes)) {
         provenance.modes[key] = await provider.setMode(page, key, on)
       }

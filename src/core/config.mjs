@@ -43,6 +43,15 @@ const DEFAULTS = {
     // Consecutive identical reads that mean "finished". A measurement of
     // stability, not padding.
     settleChecks: 5,
+    // Gemini drops model switches sometimes - their bug, not ours - and a
+    // retry usually takes. See DomProvider.selectModel.
+    modelSelectAttempts: 3,
+    // false: an unapplied model is recorded as unverified and the request
+    // proceeds (what an OpenAI-shaped client expects).
+    // true : it becomes an error. Use this for a pipeline where provenance
+    //        integrity matters more than getting an answer - a systematic
+    //        review must not attribute a row to a model that did not write it.
+    strictModel: false,
   },
 }
 

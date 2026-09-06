@@ -164,47 +164,69 @@ export class DomProvider extends Provider {
     const before = (await this.pickerLabel(page)) ?? ''
     if (verify.test(before)) return { requested: modelId, applied: before, verified: true, note: 'already active' }
 
-    await this.openPicker(page)
-    const option = page.locator(this.sel.modelOption).filter({ hasText: new RegExp(spec.match) }).first()
-    if (!(await option.count().catch(() => 0))) {
-      await page.keyboard.press('Escape').catch(() => {})
-      return { requested: modelId, applied: before || null, verified: false, note: 'option not in menu' }
-    }
+    // Gemini's picker genuinely drops selections - a known bug on their side,
+    // where a switch sometimes only takes on a later attempt. So try more
+    // than once rather than reporting failure on the first miss.
+    const attempts = this.settings.modelSelectAttempts ?? 3
+    for (let i = 1; i <= attempts; i++) {
+      await this.openPicker(page)
+      const option = page.locator(this.sel.modelOption).filter({ hasText: new RegExp(spec.match) }).first()
+      if (!(await option.count().catch(() => 0))) {
+        await page.keyboard.press('Escape').catch(() => {})
+        return { requested: modelId, applied: before || null, verified: false, note: 'option not in menu' }
+      }
 
-    // A DISABLED option is the one already in use: Gemini marks the active
-    // model aria-disabled. Clicking it is impossible, so treat it as
-    // confirmation rather than spending a click timeout failing.
-    if ((await option.getAttribute('aria-disabled').catch(() => null)) === 'true') {
-      await page.keyboard.press('Escape').catch(() => {})
-      const label = await this.pickerLabel(page)
-      return {
-        requested: modelId,
-        applied: label ?? before ?? null,
-        verified: true,
-        note: 'already active (option disabled)',
+      // A DISABLED option is the one already in use: Gemini marks the active
+      // model aria-disabled. Clicking it is impossible, so treat it as
+      // confirmation rather than spending a click timeout failing.
+      if ((await option.getAttribute('aria-disabled').catch(() => null)) === 'true') {
+        await page.keyboard.press('Escape').catch(() => {})
+        const label = await this.pickerLabel(page)
+        return {
+          requested: modelId,
+          applied: label ?? before ?? null,
+          verified: true,
+          note: 'already active (option disabled)',
+        }
+      }
+      await option.click({ timeout: 10000 })
+
+      // Verify from the UI instead of trusting the click. A picker can accept
+      // a click and not change, and a research record needs the model that
+      // actually answered - not the one that was asked for.
+      try {
+        const label = await waitFor(
+          async () => {
+            const l = await this.pickerLabel(page)
+            return l && verify.test(l) ? l : null
+          },
+          { timeout: 8000, what: `the picker to report ${modelId}` }
+        )
+        return {
+          requested: modelId,
+          applied: label,
+          verified: true,
+          note: i === 1 ? 'verified' : `verified on attempt ${i}`,
+        }
+      } catch {
+        await page.keyboard.press('Escape').catch(() => {})
+        if (i < attempts) this.log?.debug(`model switch to ${modelId} did not take (attempt ${i})`)
       }
     }
-    await option.click({ timeout: 10000 })
 
-    // Verify from the UI instead of trusting the click. A picker can accept a
-    // click and not change, and a research record needs the model that
-    // actually answered - not the one we asked for.
-    try {
-      const label = await waitFor(
-        async () => {
-          const l = await this.pickerLabel(page)
-          return l && verify.test(l) ? l : null
-        },
-        { timeout: 8000, what: `the picker to report ${modelId}` }
-      )
-      return { requested: modelId, applied: label, verified: true, note: 'verified' }
-    } catch {
-      return {
-        requested: modelId,
-        applied: (await this.pickerLabel(page)) ?? null,
-        verified: false,
-        note: 'selection not reflected in the UI',
-      }
+    // Unverified is reported, never hidden. Answering with a different model
+    // than the caller recorded is exactly the kind of silent wrongness a
+    // systematic review cannot absorb, so this must be visible in provenance.
+    const applied = (await this.pickerLabel(page)) ?? null
+    this.log?.warn(
+      `requested ${modelId} but the picker still reports "${applied}" after ${attempts} attempts ` +
+        '(a known Gemini switching bug) - recorded as unverified'
+    )
+    return {
+      requested: modelId,
+      applied,
+      verified: false,
+      note: `selection not reflected in the UI after ${attempts} attempts`,
     }
   }
 
