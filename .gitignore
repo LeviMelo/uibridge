@@ -1,0 +1,18 @@
+# Chrome profiles. These hold YOUR live Google/OpenAI session cookies -
+# committing them would publish your logins. Never track this.
+.profiles/
+
+node_modules/
+__pycache__/
+*.pyc
+
+# Run artefacts, not source.
+downloads/
+*.log
+
+# Captured DOM/network dumps from probes: large, machine-specific, and they
+# can contain conversation content. Fixtures under testdata/ are tracked;
+# these subfolders are not.
+testdata/dom/
+testdata/net/
+testdata/downloads/

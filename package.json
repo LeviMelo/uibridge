@@ -1,0 +1,14 @@
+{
+  "name": "uibridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenAI-compatible local endpoint backed by chat UI sessions in a real browser",
+  "scripts": {
+    "login": "node login.mjs",
+    "serve": "node server.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}

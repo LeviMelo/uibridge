@@ -1,0 +1,6 @@
+pmid,year,title,n,outcome,effect,ci_low,ci_high
+31234567,2019,Remimazolam vs midazolam for pediatric MRI sedation,120,sedation success,1.24,1.05,1.47
+32145678,2020,EEG-guided sevoflurane in tonsillectomy,86,emergence delirium,0.61,0.42,0.89
+33256789,2021,VR distraction at induction in children 4-10,150,preop anxiety (mYPAS),-8.30,-12.10,-4.50
+34367890,2022,Dexmedetomidine premedication in pediatric surgery,204,parental separation anxiety,0.72,0.55,0.94
+35478901,2023,Nitrous oxide for pediatric laceration repair,98,procedural distress,-5.10,-7.80,-2.40

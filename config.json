@@ -1,0 +1,137 @@
+{
+  "_comment": "Selectors for each chat UI. When a provider reshuffles their DOM, fix it HERE - no code changes. Run `node calibrate.mjs <service>` to dump live candidates.",
+  "port": 8477,
+  "profileDir": ".profiles",
+  "headless": false,
+  "defaultService": "gemini",
+  "_concurrency": "How many tabs run at once per service. Each tab is an independent conversation. Raise until the provider starts throttling; 6 is a sane start.",
+  "services": {
+    "gemini": {
+      "url": "https://gemini.google.com/app",
+      "newChatPerRequest": true,
+      "composer": "div.ql-editor[contenteditable='true'], rich-textarea div[contenteditable='true']",
+      "sendButton": "button[aria-label*='Send' i], button[aria-label*='Enviar' i], button.send-button",
+      "stopButton": "button[aria-label*='Stop response' i], button[aria-label*='Stop' i], button[aria-label*='Parar' i]",
+      "responseBlocks": "model-response",
+      "responseText": "message-content, .markdown",
+      "readyTimeoutMs": 60000,
+      "responseTimeoutMs": 600000,
+      "concurrency": 2,
+      "newChatButton": "button[aria-label*='New chat' i], button[aria-label*='Nova conversa' i], a[aria-label*='New chat' i], a[aria-label*='Nova conversa' i], expandable-button[data-test-id='new-chat-button'] button",
+      "pollMs": 150,
+      "transientText": [
+        "Pesquisando na internet",
+        "Searching the internet",
+        "Analisando",
+        "Analyzing",
+        "Pensando",
+        "Thinking"
+      ],
+      "settleChecks": 5,
+      "modelPicker": "button[aria-label*='mode picker' i], button[aria-label*='seletor de modo' i], button[aria-label*='mode selector' i], button[aria-label*='model' i]",
+      "modelOption": "[role='menuitem']",
+      "models": {
+        "gemini-flash-lite": {
+          "match": "Flash-Lite",
+          "verify": "Flash-Lite"
+        },
+        "gemini-flash": {
+          "match": "Flash(?!-)",
+          "verify": "Flash(?!-)"
+        },
+        "gemini-pro": {
+          "match": "\\bPro\\b",
+          "verify": "\\bPro\\b"
+        }
+      },
+      "modes": {
+        "thinking": {
+          "option": "Extended thinking|Racioc[ií]nio estendido",
+          "onLabel": "Extended"
+        }
+      },
+      "signedOutMarker": "Faça login|Fazer login|Sign in to access|Sign in",
+      "accountMarker": "a[aria-label*='Conta do Google' i], a[aria-label*='Google Account' i], img[alt*='@'], [data-test-id='account-menu-button']",
+      "temporaryChatButton": "button[aria-label*='Temporary chat' i], button[aria-label*='Chat temporário' i]",
+      "_labels": "picker aria-label: 'Open mode picker, currently <X>'. 'X Extended' = thinking ON; 'Gemini X' = thinking OFF.",
+      "uploadButton": "button[aria-label*='Upload' i], button[aria-label*='tools' i]",
+      "uploadFilesOption": "images-files-uploader button, gem-button:has-text('Files') button, button:has-text('Files')",
+      "attachmentChip": "uploader-file-preview",
+      "uploadingText": "Uploading file|Enviando arquivo|Fazendo upload",
+      "_upload": "PRIMARY upload = CDP Input.dispatchDragEvent (a TRUSTED drag with real file paths). Synthetic new DragEvent() from page context is IGNORED by Gemini - tested against 10 different targets, zero attachments every time. The 'Upload & tools -> Files' menu is a flaky fallback. Readiness = one uploader-file-preview per file AND 'Uploading file' gone; the send button is enabled throughout and is NOT a readiness signal.",
+      "dropTarget": "input-area-v2, input-container, rich-textarea",
+      "sourceLink": "a[href]",
+      "sourceChip": "source-inline-chip, source-footnote, sources-carousel-inline",
+      "_sources": "Sources are NOT inline anchors: a browsing response has source chips but zero anchors in the body. The URLs live behind the message '...' menu -> 'View sources' (data-test-id=sources-menu-button), which yields text-fragment URLs (#:~:text=...) pinpointing the cited passage. `browsed` comes from chip count / the search transient; `sources` requires opening that panel. 'sources-list' is the collapsed carousel and is always empty - never read it.",
+      "searchTransient": "Searching the internet|Searching the web|Pesquisando na internet|Pesquisando",
+      "moreButton": "message-actions button[aria-label*='More' i], message-actions button[data-test-id*='more' i]",
+      "viewSourcesItem": "[data-test-id='sources-menu-button'], [role='menuitem']:has-text('View sources')",
+      "sourcePanelLink": "a[href^='http']",
+      "sourceIgnoreHosts": [
+        "accounts.google.",
+        "support.google.",
+        "policies.google.",
+        "myactivity.google.",
+        "gemini.google.",
+        "/intl/",
+        "about/products"
+      ],
+      "_sourceFilter": "Panel chrome links (Google product/sign-out links) have EMPTY link text; real sources always carry a title. Requiring a non-empty title is the robust filter - a host blocklist alone missed google.com.br/intl.",
+      "copyButton": "message-actions button[aria-label*='Copy' i], copy-button button",
+      "_extraction": "PRIMARY text extraction is the message Copy button + clipboard, which yields the ORIGINAL MARKDOWN: tables as pipe tables, LaTeX as $...$ source, code in ``` fences. innerText is materially worse - KaTeX renders as garbled glyphs ('t ^ 2 = C Q-(k-1)'), tables lose structure, code loses its fence. innerText is only the fallback. NOTE the clipboard is shared across tabs, so copy+read must hold a mutex.",
+      "_generatedFiles": "Gemini CAN emit real files. The response renders <generated-file> with a chip: img.file-icon-lr, div[data-test-id=file-name][title=<real filename>], div.file-type-lr, and a gem-button 'Open'. There is NO <a download> and no blob: href, so a search for download affordances finds NOTHING - that is why it is easy to conclude wrongly that no file was produced. 'Open' opens a Drive-style viewer overlay in the SAME page; its toolbar is div[role=button] (Print / Download / More actions), NOT <button>, so button[aria-label*=Download] only ever matches the code-block's 'Download code'. Clicking div[aria-label=Download] fires a genuine browser download. Verified: pediatric_anaesthesia_trial_data.csv, 422 bytes.",
+      "extensionsMarker": ".contains-extensions-response",
+      "_extensionsMarker": "Gemini adds this class to structured-content-container when its code/extension tool ran. Checked across six probes: present for csvfile and computational thinking, absent for prose, tables, maths and plain code. It is the gate for looking for a file at all, so ordinary responses cost nothing.",
+      "generatedFile": "generated-file",
+      "generatedFileName": "[data-test-id='file-name']",
+      "generatedFileType": ".file-type-lr",
+      "fileOpenButton": "gem-button.open-button button, .open-button button",
+      "fileDownload": "[aria-label='Download'], [data-tooltip='Download']",
+      "fileViewerClose": "[aria-label='Close'], [data-tooltip='Close']",
+      "downloadDir": "downloads",
+      "fileWaitMs": 20000,
+      "fileDownloadTimeoutMs": 30000,
+      "fileInlineMaxBytes": 262144
+    },
+    "chatgpt": {
+      "url": "https://chatgpt.com/",
+      "newChatPerRequest": true,
+      "composer": "div#prompt-textarea[contenteditable='true'], div[contenteditable='true'][data-virtualkeyboard]",
+      "sendButton": "button[data-testid='send-button'], button#composer-submit-button",
+      "stopButton": "button[data-testid='stop-button'], button[data-testid='composer-speech-button-container'] ~ button[aria-label*='stop' i], button[aria-label*='Stop' i], button[aria-label*='Parar' i]",
+      "responseBlocks": "div[data-message-author-role='assistant']",
+      "responseText": "div.markdown, .prose",
+      "fileInput": "input[type='file']",
+      "readyTimeoutMs": 60000,
+      "responseTimeoutMs": 600000,
+      "concurrency": 2,
+      "newChatButton": "button[data-testid='create-new-chat-button'], a[data-testid='create-new-chat-button'], button[aria-label*='New chat' i]",
+      "pollMs": 150,
+      "transientText": [
+        "Searching the web",
+        "Pesquisando",
+        "Thinking",
+        "Reasoning"
+      ],
+      "settleChecks": 5,
+      "modelPicker": "button[data-testid='model-switcher-dropdown-button'], button[aria-label*='model' i]",
+      "modelOption": "[role='menuitem'], [role='option']",
+      "models": {
+        "chatgpt-auto": {
+          "match": ".",
+          "modes": {}
+        }
+      },
+      "modes": {},
+      "uploadButton": "button[aria-label*='Attach' i], button[data-testid='composer-plus-btn']",
+      "attachmentChip": "[data-testid*='attachment' i], .composer-attachment",
+      "uploadingText": "Uploading",
+      "dropTarget": "form, div#prompt-textarea, main",
+      "sourceLink": "a[href]",
+      "sourceChip": "[data-testid*='citation' i], span[data-state] a",
+      "copyButton": "button[data-testid='copy-turn-action-button'], button[aria-label*='Copy' i]"
+    }
+  },
+  "_dials": "concurrency = how many real conversations run at once. That is the only throttle; there are no artificial sleeps. Completion is detected structurally (send button re-enables), which paces things naturally.",
+  "_models": "Model ids at /v1/models. 'match' is a regex against the picker option text; keep it to the version number so it survives UI language changes. NOTE: Gemini can sometimes swap model mid-thread but it is unreliable, so each request opens a fresh chat and selects there."
+}
