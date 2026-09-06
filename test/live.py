@@ -190,17 +190,21 @@ def t_thinking_toggle_readback():
 def t_sources_from_menu():
     """Citations live behind '...' -> View sources, not in the message body.
 
-    sources-list is present in EVERY response, so it cannot be the browsing
-    signal; source-inline-chip is. Gemini often ignores a search instruction
-    and answers from its weights - a product fact, not a bug here - so this
-    asserts the panel is read correctly only WHEN it actually browsed.
+    Two facts must not be conflated. sources-list is present in EVERY
+    response, so it cannot be the browsing signal; source-inline-chip and the
+    sources menu entry are. And a response can ATTEMPT a search and still
+    answer from the model's weights: measured directly, one such reply had
+    zero inline chips and no "View sources" entry in its menu at all. So this
+    asserts the correct reading of the UI, not that Gemini chose to browse.
     """
     r = call("Search the web for guidance published in the last year on "
              "paediatric procedural sedation, and name each source site.",
              model=MODEL, modes=NO_THINK)
     urls = [s["url"] for s in r["sources"]]
     if not r["browsed"]:
-        check("sources panel read (did not browse this run)", True, "browsed=False")
+        # No citations in the UI: sources MUST be empty, or we invented them.
+        check("no citations claimed when the UI shows none", not urls,
+              f"searched={r['searched']} browsed=False sources={len(urls)}")
         return
     clean = all("accounts.google" not in u and "/intl/" not in u for u in urls)
     check("sources read from the View sources panel",
@@ -213,8 +217,9 @@ def t_no_false_browsing():
     """browsed must be False when nothing was searched."""
     r = call("Define statistical heterogeneity in meta-analysis in one sentence.",
              model=MODEL, modes=NO_THINK)
-    check("browsed=False when no search happened", r["browsed"] is False,
-          f"browsed={r['browsed']} sources={len(r['sources'])}")
+    check("browsed=False when no search happened",
+          r["browsed"] is False and not r["sources"],
+          f"browsed={r['browsed']} searched={r['searched']} sources={len(r['sources'])}")
 
 
 # ---- isolation + error paths ---------------------------------------------
@@ -260,9 +265,13 @@ def t_empty_messages():
 
 
 def t_unknown_model_falls_back():
+    # This one runs a real request through the fallback provider, so it needs
+    # a real timeout - not raw_post's short default, which is sized for the
+    # checks that are supposed to fail immediately.
     status, _ = raw_post({"model": "totally-made-up",
                           "messages": [{"role": "user",
-                                        "content": "Define publication bias."}]})
+                                        "content": "Define publication bias."}]},
+                         timeout=600)
     check("unknown model falls back, no crash", status == 200, f"HTTP {status}")
 
 

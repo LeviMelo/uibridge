@@ -32,6 +32,10 @@ const DEFAULTS = {
     // actually takes effect (switching mid-thread is unreliable).
     newChatPerRequest: true,
     readyTimeoutMs: 60000,
+    // A turn appears within seconds of a real submission. Its own short
+    // budget, so a prompt that never got sent fails in a minute instead of
+    // sitting for the full response timeout with a misleading message.
+    submitAckMs: 60000,
     responseTimeoutMs: 600000,
     uploadTimeoutMs: 180000,
     fileWaitMs: 20000,

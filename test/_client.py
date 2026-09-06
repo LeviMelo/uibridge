@@ -89,12 +89,14 @@ def call(prompt, model="gemini", attachments=None, modes=None, timeout=900):
         "code_blocks": ub.get("code_blocks") or [],
         # Files the PROVIDER generated, already downloaded to disk.
         "files": ub.get("files") or [],
-        # What the UI actually did, not what the prompt asked for.
+        # Two different facts: "searched" means a search was attempted,
+        # "browsed" means the answer actually carries citations.
         "browsed": ub.get("browsed"),
+        "searched": ub.get("searched", False),
         "sources": ub.get("sources") or [],
-        # Provenance for a methods section: which model really answered, and
-        # whether the UI confirmed the selection.
-        "provenance": model_prov.get("applied"),
+        # Provenance for a methods section: what the UI reported AFTER model
+        # and modes were both applied. The per-step label is stale by then.
+        "provenance": prov.get("final_state") or model_prov.get("applied"),
         "model_verified": model_prov.get("verified"),
         "modes": prov.get("modes") or {},
     }

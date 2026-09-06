@@ -128,6 +128,11 @@ export class DomProvider extends Provider {
     return el.innerText().catch(() => null)
   }
 
+  /** Authoritative provenance: the picker label after model AND modes. */
+  async readState(page) {
+    return this.pickerLabel(page)
+  }
+
   async openPicker(page) {
     const s = this.sel
     await this.requireContract(page, 'modelPicker', s.modelPicker)
@@ -279,18 +284,63 @@ export class DomProvider extends Provider {
     this.log?.debug(`${n} attachment(s) registered`)
   }
 
+  /**
+   * Type the prompt and send it - then CHECK that it went.
+   *
+   * A click on the send button is not proof of submission. If the composer
+   * had lost focus, insertText goes nowhere and the click submits an empty
+   * box: no turn is ever created, and the request then sits in
+   * awaitCompletion until its timeout. That produced a 600s hang whose log
+   * line ("waiting for a response turn to appear") described the symptom and
+   * said nothing about the cause.
+   *
+   * The composer emptying is the observable confirmation, so verify it and
+   * retry once before giving up.
+   */
   async submit(page, prompt) {
     const s = this.sel
     const composer = page.locator(s.composer).first()
-    await composer.click()
-    await page.keyboard.insertText(prompt)
 
-    if (s.submitKey) {
-      await composer.press(s.submitKey)
-      return
+    const type = async () => {
+      await composer.click()
+      await page.keyboard.insertText(prompt)
+      const typed = ((await composer.innerText().catch(() => '')) ?? '').trim()
+      if (!typed) throw new BridgeError('the prompt did not reach the composer', {
+        status: 502,
+        code: 'compose_failed',
+        retryable: true,
+      })
     }
-    await this.requireContract(page, 'sendButton', s.sendButton)
-    await page.locator(s.sendButton).first().click({ timeout: 15000 })
+    const fire = async () => {
+      if (s.submitKey) return composer.press(s.submitKey)
+      await this.requireContract(page, 'sendButton', s.sendButton)
+      await page.locator(s.sendButton).first().click({ timeout: 15000 })
+    }
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await type()
+      await fire()
+      try {
+        // Submission clears the composer. Seconds, not minutes - if it has
+        // not happened by now it is not going to.
+        await waitFor(
+          async () => {
+            const left = ((await composer.innerText().catch(() => '')) ?? '').trim()
+            return left ? null : true
+          },
+          { timeout: 8000, poll: this.settings.pollMs, what: 'the composer to clear after sending' }
+        )
+        return
+      } catch {
+        if (attempt === 2) {
+          throw new BridgeError(
+            `${this.id}: the prompt was typed but never submitted - the composer still holds it`,
+            { status: 502, code: 'submit_failed', retryable: true }
+          )
+        }
+        this.log?.warn('send did not take; retrying once')
+      }
+    }
   }
 
   // --- completion ----------------------------------------------------------
@@ -308,12 +358,16 @@ export class DomProvider extends Provider {
     const cfg = this.settings
     const before = ctx.turnsBefore ?? 0
 
+    // A turn appears within a second or two of a real submission, so this
+    // gets its OWN short budget rather than the full response timeout.
+    // Waiting ten minutes to discover nothing was ever sent tells you
+    // nothing; failing in one, retryably, tells you plenty.
     const total = await waitFor(
       async () => {
         const n = await count(page, s.responseBlocks)
         return n > before ? n : null
       },
-      { timeout: cfg.responseTimeoutMs, poll: cfg.pollMs, what: 'a response turn to appear' }
+      { timeout: cfg.submitAckMs ?? 60000, poll: cfg.pollMs, what: 'a response turn to appear' }
     )
     ctx.index = total - 1
 
@@ -382,7 +436,7 @@ export class DomProvider extends Provider {
         })
       : []
 
-    const { browsed, sources } = await this.collectSources(page, ctx)
+    const { browsed, searched, sources } = await this.collectSources(page, ctx)
 
     return {
       text,
@@ -392,6 +446,7 @@ export class DomProvider extends Provider {
       files,
       sources,
       browsed,
+      searched,
     }
   }
 
@@ -405,23 +460,37 @@ export class DomProvider extends Provider {
    */
   async collectSources(page, ctx) {
     const s = this.sel
-    if (!s.sourceChip) return { browsed: false, sources: [] }
+    if (!s.sourceChip) return { browsed: false, searched: false, sources: [] }
 
+    // Two DIFFERENT facts, and conflating them made the bridge claim
+    // citations that did not exist:
+    //   searched - the "Searching the internet" placeholder appeared, so a
+    //              search was ATTEMPTED
+    //   browsed  - the response actually carries citations
+    // A response can search and still answer from its own weights: measured
+    // directly, one such reply had zero inline chips AND no "View sources"
+    // entry in its menu (which held only Branch in new chat, Listen, Export
+    // to Docs, Draft in Gmail, Report legal issue, See response details).
+    // Only chips and the sources menu are authoritative.
+    const searched = !!ctx.browsedHint
     const chips = await count(page, s.sourceChip)
-    const browsed = chips > 0 || !!ctx.browsedHint
-    if (!browsed || !s.moreButton || !s.viewSourcesItem) return { browsed, sources: [] }
+    if (!s.moreButton || !s.viewSourcesItem) return { browsed: chips > 0, searched, sources: [] }
+    if (!chips && !searched) return { browsed: false, searched, sources: [] }
 
     const block = page.locator(s.responseBlocks).nth(ctx.index)
     const more = block.locator(s.moreButton).first()
-    if (!(await more.count().catch(() => 0))) return { browsed, sources: [] }
+    if (!(await more.count().catch(() => 0))) return { browsed: chips > 0, searched, sources: [] }
 
     await more.click({ timeout: 8000 }).catch(() => {})
     const item = page.locator(s.viewSourcesItem).first()
     if (!(await item.count().catch(() => 0))) {
+      // No sources entry means this response has no citations, whatever the
+      // placeholder suggested during generation.
       await page.keyboard.press('Escape').catch(() => {})
-      return { browsed, sources: [] }
+      return { browsed: chips > 0, searched, sources: [] }
     }
     await item.click({ timeout: 8000 }).catch(() => {})
+    const browsed = true
 
     const links = await page
       .locator(s.sourcePanelLink)
@@ -437,7 +506,7 @@ export class DomProvider extends Provider {
       seen.add(l.url)
       return true
     })
-    return { browsed, sources }
+    return { browsed, searched, sources }
   }
 
   /**

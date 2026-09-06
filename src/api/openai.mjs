@@ -86,8 +86,13 @@ export function completionResponse({ modelId, result, provider }) {
       code_blocks: result.code_blocks,
       // Files the PROVIDER generated, already on disk.
       files: result.files,
-      // What it actually did, not what it was told to do.
+      // What it actually did, not what it was told to do. These are two
+      // different facts: `searched` means a search was attempted, `browsed`
+      // means the answer carries citations. A reply can do the first without
+      // the second, and reporting them as one claimed citations that were
+      // never there.
       browsed: result.browsed,
+      searched: result.searched ?? false,
       sources: result.sources,
       json: extractJSON(result.text),
     },

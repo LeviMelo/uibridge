@@ -99,6 +99,20 @@ export class Provider {
     this.#todo('setMode')
   }
 
+  /**
+   * The UI's own description of its current settings, read AFTER everything
+   * has been applied.
+   *
+   * This is the authoritative provenance record. Per-step results are stale
+   * by the end of setup: on a combined picker, the label captured while
+   * choosing the model does not yet know about a mode toggled afterwards, so
+   * reporting it makes modes look inverted. Optional - a provider with no
+   * readable state returns null.
+   */
+  async readState(_page) {
+    return null
+  }
+
   // --- input ---------------------------------------------------------------
 
   /** Attach local files and wait until the UI has really registered them. */

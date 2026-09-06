@@ -99,10 +99,17 @@ export class Session {
 
       // Model and modes first: on some providers they cannot be changed once
       // a thread has started, and provenance must describe the turn we send.
-      const provenance = { model: null, modes: {} }
+      const provenance = { model: null, modes: {}, final_state: null }
       if (model) provenance.model = await provider.selectModel(page, model)
       for (const [key, on] of Object.entries(modes)) {
         provenance.modes[key] = await provider.setMode(page, key, on)
+      }
+      // Read the UI's state ONCE MORE, after everything is applied. The
+      // per-step labels are stale by now: on a combined picker the label
+      // captured while choosing the model predates any mode toggled after
+      // it, which made thinking on/off read exactly backwards.
+      if (model || Object.keys(modes).length) {
+        provenance.final_state = await provider.readState(page).catch(() => null)
       }
 
       if (resolved.length) await provider.attach(page, resolved)

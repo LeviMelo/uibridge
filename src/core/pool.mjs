@@ -35,21 +35,41 @@ export class TabPool {
     return page
   }
 
-  release(page) {
+  /**
+   * Return a tab. `discard` closes it instead of recycling it.
+   *
+   * A request that failed may have left the page mid-dialog, mid-upload or on
+   * an error state, and handing that tab to the next caller makes ONE failure
+   * become every subsequent failure - with a misleading symptom each time.
+   * Tabs are cheap; a poisoned pool is not.
+   */
+  release(page, { discard = false } = {}) {
     this.#busy.delete(page)
+    if (discard && !page.isClosed()) {
+      this.#log.debug('discarding a tab after a failed request')
+      page.close().catch(() => {})
+      return this.#pump()
+    }
     if (page.isClosed()) return this.#pump()
     const next = this.#waiters.shift()
     if (next) return next(page)
     this.#idle.push(page)
   }
 
-  /** Borrow a tab for the duration of `fn`, returning it even on throw. */
+  /**
+   * Borrow a tab for `fn`. A tab is always returned; one whose request threw
+   * is discarded rather than recycled.
+   */
   async withTab(fn) {
     const page = await this.acquire()
+    let failed = false
     try {
       return await fn(page)
+    } catch (e) {
+      failed = true
+      throw e
     } finally {
-      this.release(page)
+      this.release(page, { discard: failed })
     }
   }
 
