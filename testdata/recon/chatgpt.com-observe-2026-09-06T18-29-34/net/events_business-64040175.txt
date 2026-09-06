@@ -1,0 +1,10 @@
+URL: https://chatgpt.com/unauth-mweb/events/business
+METHOD: POST  STATUS: 204  MIME:   TYPE: Fetch  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: sec-ch-ua-platform, OAI-Session-Id, Referer, x-web-mobile-connectivity-effective-type, sec-ch-ua, X-Web-Mobile-Conversation-Document-Affinity, sec-ch-ua-mobile, x-web-mobile-document-renderer, User-Agent, X-Web-Mobile-Document-Worker-Version, content-type, Cloudflare-Workers-Version-Overrides
+RESPONSE HEADER NAMES: x-request-id, x-worker-version-tag, report-to, x-content-type-options, date, vary, strict-transport-security, x-web-mobile-experiment-router, nel, cross-origin-opener-policy, access-control-allow-credentials, referrer-policy, cf-ray, x-worker-version, access-control-allow-origin, server
+
+===== REQUEST BODY =====
+{"anonymousId":"0f6465cc-f43d-4b01-a0b8-f310bd74f101","events":[{"kind":"telemetry_runtime_ready","occurredAt":"2026-09-06T18:29:40.020Z"}]}
+
+===== RESPONSE BODY =====

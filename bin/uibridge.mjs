@@ -12,7 +12,8 @@
 // first question is always "which selector stopped matching?", and that
 // deserves a real tool rather than a probe rewritten each time.
 
-import { loadConfig, providerSettings, portFor } from '../src/core/config.mjs'
+import { loadConfig, providerSettings, portFor, ROOT } from '../src/core/config.mjs'
+import { resolve } from 'node:path'
 import { setLevel, logger } from '../src/core/log.mjs'
 import { BridgeError } from '../src/core/errors.mjs'
 import { attachBrowser } from '../src/core/chrome.mjs'
@@ -21,6 +22,7 @@ import { Session } from '../src/session.mjs'
 import { serve } from '../src/api/server.mjs'
 import { providerClass, providerIds } from '../src/providers/registry.mjs'
 import { captureExchange } from '../src/tools/capture.mjs'
+import { reconObserve, reconExchange } from '../src/tools/recon.mjs'
 
 const [, , cmd, ...rest] = process.argv
 if (process.env.UIBRIDGE_LOG) setLevel(process.env.UIBRIDGE_LOG)
@@ -37,6 +39,8 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge doctor [provider]          verify Chrome, session and UI contracts
   uibridge ask <provider> "prompt"    single prompt, no server
   uibridge capture <provider> ["p"]   record DOM + network for one exchange
+  uibridge recon observe <url>        describe an UNKNOWN site: DOM + network
+  uibridge recon exchange <url> ...   drive one turn there and record the wire
 
   providers: ${providerIds.join(', ')}
 `)
@@ -149,6 +153,42 @@ async function doctor(only) {
   process.exit(bad ? 1 : 0)
 }
 
+/**
+ * RECON: point it at a URL, not a provider.
+ *
+ * Deliberately outside the provider registry: its whole purpose is to work
+ * on a site nothing is known about yet, which is exactly the situation
+ * `capture` cannot serve because capture needs the selectors we are trying
+ * to learn. Flags are --key=value; --profile picks which Chrome profile
+ * (i.e. which signed-in session) to look through.
+ */
+async function recon(argv) {
+  const [phase, url, ...flags] = argv
+  const opts = Object.fromEntries(
+    flags
+      .filter((f) => f.startsWith('--'))
+      .map((f) => {
+        const i = f.indexOf('=')
+        return i === -1 ? [f.slice(2), true] : [f.slice(2, i), f.slice(i + 1)]
+      })
+  )
+  if (!url) {
+    console.error('usage: uibridge recon observe|exchange <url> [--profile=chatgpt] [--composer=sel] [--send=sel] [--turns=sel] [--prompt=...]')
+    process.exit(1)
+  }
+  // ABSOLUTE. Chrome resolves a relative --user-data-dir against its own
+  // working directory, not ours, and then simply never opens the debugging
+  // port - which surfaces as "Chrome failed to start" with no clue why.
+  const profile = resolve(ROOT, cfg.profileDir, opts.profile ?? new URL(url).host.split('.')[0])
+  const port = Number(opts.port ?? 9400)
+  if (phase === 'observe') await reconObserve(cfg, url, { port, profile })
+  else if (phase === 'exchange') await reconExchange(cfg, url, { ...opts, port, profile })
+  else {
+    console.error('recon phase must be "observe" or "exchange"')
+    process.exit(1)
+  }
+}
+
 async function ask(id, prompt) {
   if (!prompt) usage(1)
   const session = await Session.open(id, { cfg })
@@ -172,6 +212,7 @@ try {
   else if (cmd === 'doctor') await doctor(rest[0])
   else if (cmd === 'ask') await ask(requireProviderArg(rest[0]), rest.slice(1).join(' '))
   else if (cmd === 'capture') await captureExchange(cfg, requireProviderArg(rest[0]), rest.slice(1).join(' '))
+  else if (cmd === 'recon') await recon(rest)
   else usage(cmd === '-h' || cmd === '--help' ? 0 : 1)
 } catch (e) {
   if (e instanceof BridgeError) {

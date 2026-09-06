@@ -1,0 +1,11 @@
+URL: https://chatgpt.com/unauth-mweb/assets/conversation-stream-markers-rL5nDku9.js
+METHOD: GET  STATUS: 200  MIME: text/javascript  TYPE: Script  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: Origin, sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+var e=(e,{active:t=!0}={})=>{let n=e.replaceAll(`&`,`&amp;`).replaceAll(`<`,`&lt;`).replaceAll(`>`,`&gt;`).replaceAll(`"`,`&quot;`);return`<span data-text-shimmer><span data-text-shimmer-text>${n}</span>${t?`<span data-text-shimmer-overlay aria-hidden="true" inert data-text-shimmer-label="${n}"></span>`:``}</span>`},t=/[^a-z0-9_-]+/gi,n=e=>{let n=`assistant-${e.replace(t,`-`)}`;return{committedRange:`${n}-committed`,committedTail:`${n}-committed-tail`,pendingRange:`${n}-pending`,pendingTail:`${n}-pending-tail`,reasoningRange:`${n}-reasoning`}},r=(e,t,r)=>{let s=n(e);return`${o(s.reasoningRange,i(r))}${o(s.committedRange,`${t}${a(s.committedTail)}`)}${o(s.pendingRange,a(s.pendingTail))}`},i=(t,{active:n=!1,transient:r=!1}={})=>{let i=t?.trim();return i?`<div data-assistant-reasoning-summary=""${n?` data-assistant-reasoning-active=""`:``}${n&&r?` data-assistant-reasoning-transient=""`:``}>${n?e(i):`<span>${s(i)}</span>`}</div>`:``},a=e=>`<?marker name="${e}">`,o=(e,t)=>`<?start name="${e}">${t}<?end>`,s=e=>e.replaceAll(`&`,`&amp;`).replaceAll(`<`,`&lt;`).replaceAll(`>`,`&gt;`);export{i as n,r,n as t};

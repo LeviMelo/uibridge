@@ -1,0 +1,11 @@
+URL: https://chatgpt.com/unauth-mweb/assets/partial-island-shared-runtime-mobile-composer-assistant-canonical-dil-weather-assistant-can-i14o7pxp-Cb81Ss7X.js
+METHOD: GET  STATUS: 200  MIME: text/javascript  TYPE: Script  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: Origin, sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+var e=e=>typeof e==`object`&&!!e&&`accept`in e&&typeof e.accept==`function`&&`source`in e&&(e.source===`camera`||e.source===`gallery`);export{e as t};

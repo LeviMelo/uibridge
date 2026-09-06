@@ -1,0 +1,66 @@
+URL: https://chatgpt.com/unauth-mweb/manifest.json
+METHOD: GET  STATUS: 200  MIME: application/json  TYPE: Manifest  STREAMED: false
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: strict-transport-security, cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+{
+  "name": "ChatGPT",
+  "short_name": "ChatGPT",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff",
+  "icons": [
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-48x48.png",
+      "type": "image/png",
+      "sizes": "48x48"
+    },
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-72x72.png",
+      "type": "image/png",
+      "sizes": "72x72"
+    },
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-96x96.png",
+      "type": "image/png",
+      "sizes": "96x96"
+    },
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-144x144.png",
+      "type": "image/png",
+      "sizes": "144x144"
+    },
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-192x192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    },
+    {
+      "src": "/unauth-mweb/images/chatgpt-icon-maskable-512x512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ],
+  "prefer_related_applications": true,
+  "related_applications": [
+    {
+      "platform": "play",
+      "id": "com.openai.chatgpt",
+      "url": "https://play.google.com/store/apps/details?id=com.openai.chatgpt&utm_source=android_chrome_manifest"
+    }
+  ]
+}

@@ -1,0 +1,1184 @@
+[
+  {
+    "path": "chatgpt.com/",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/html",
+    "bytes": 366372,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Upgrade-Insecure-Requests",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "sec-ch-ua-platform"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/client-DLhqMDEN.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 2984,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/rolldown-runtime-hePW80VL.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 716,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/client-shared-D9QzqXPI.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 159727,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/client-YfHqMnf4.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 67900,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/react-stable-BnLHpVfZ.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 294092,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/pt-BR-CfDgHfaS.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 15291,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/mobile-sidebar-CHIAD_m-.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 22319,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/scripts/declarative-partial-updates-8cc7318d3b71.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 62385,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/manifest.json",
+    "method": "GET",
+    "status": 200,
+    "mime": "application/json",
+    "bytes": 1372,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/desktop-shell-C8i1msuz.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 5158,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/lazy.sidebar-CenCL0yq.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 6933,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/page-view",
+    "method": "POST",
+    "status": 204,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "content-type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/sentinel/chat-requirements/prepare",
+    "method": "POST",
+    "status": 200,
+    "mime": "application/json",
+    "bytes": 71966,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "OAI-Echo-Logs",
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "Accept",
+      "X-Web-Mobile-Document-Worker-Version",
+      "Content-Type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/conversation/prepare",
+    "method": "POST",
+    "status": 200,
+    "mime": "application/json",
+    "bytes": 372,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-oai-turn-trace-id",
+      "x-web-mobile-prepare-state",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "Content-Type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/app.startup-BjA_GdP6.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 6931,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/performance-metrics-BAVMaRrN.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 43901,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/mobile-composer-CsTFg72Q.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 112554,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/more-focus-D_rjcxPU.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 273,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/chatgpt-wordmark-paths-CZfwvYQI.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 2487,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/web-vitals-stable-Cat3YSWX.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 24226,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/pt-BR-C12-1Mvc.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 2793,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-followup-client-GHMAP-dX.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 84635,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/form-fields-12IcNAzz.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 1141,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/image-attachment-prompt-storage-wVIdP5lO.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 1532,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-announcements-Ck66BFTr.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 6242,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-retry-storage-gplAo2AC.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 4990,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/partial-island-shared-runtime-mobile-composer-assistant-canonical-dil-weather-assistant-can-i14o7pxp-Cb81Ss7X.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 150,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-request-context-CN-DW3yr.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 134,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/partial-island-shared-runtime-native-text-only-client-mobile-composer-assistant-canonical-dil-Bo5BoIF9.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 162,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-history-client-D0XRt1tH.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 17428,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/deferred-react-conversation-runtime-B-K4u0jD.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 384,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/desktop-product-hover-card-CJnPS0zo.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 5290,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/returning-user-auth-prompt-DHupp3S_.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 5408,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/desktop-sidebar-swipe-CUm1zp3_.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 6758,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/transcript-viewport-7xheNmsG.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 53666,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/deferred-content-reference-sheets-DhZVrDWn.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 2922,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/essential-conversation-runtime-DcfrRA62.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 18160,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/deferred-conversation-runtime-BKFy2TIj.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 24469,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/auth-entry-cleanup-BvlqHyeS.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 419,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-stream-markers-rL5nDku9.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 1116,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-ads.adsFormats.module-BIeJyX2Z.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 2246,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/install-icon-sprite-svHzLoJH.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 214,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-transcript.module-Br-k2jdG.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 4689,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/declarative-partial-update-tree-discovery-DaFejPY5.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 67,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-CFcRQHZ8.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 8948,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/dil-content-reference.module-8hNKYYTy.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 55,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/content-reference-sheet-open-request-L7abtryQ.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 6344,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/assistant-ads-analytics-queue-EfpSQuBc.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 291,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/content-reference-sheets-DU0vGGYK.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 13312,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/conversation-announcements-localized-Dif085Jd.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 284,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/google-one-tap-DMj1m9zj.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 4748,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/format-message-DKLa3_Pc.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 187,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/cookie-stable-pdQiWSJg.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 3469,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/auth-handoff-DjxcxuiN.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 2481,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/assets/stored-auth-account-ozixkmGM.js",
+    "method": "GET",
+    "status": 200,
+    "mime": "text/javascript",
+    "bytes": 789,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "Origin",
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "accounts.google.com/gsi/client",
+    "method": "GET",
+    "status": 200,
+    "mime": "application/javascript",
+    "bytes": 272937,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "Referer",
+      "User-Agent",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/business",
+    "method": "POST",
+    "status": 204,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "content-type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/business",
+    "method": "POST",
+    "status": 204,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "content-type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/business",
+    "method": "POST",
+    "status": 204,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "content-type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/business",
+    "method": "POST",
+    "status": 204,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "content-type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/statsc/flush",
+    "method": "POST",
+    "status": 200,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "X-Web-Mobile-Conversation-Document-Affinity",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "X-Web-Mobile-Document-Worker-Version",
+      "Content-Type",
+      "Cloudflare-Workers-Version-Overrides"
+    ]
+  },
+  {
+    "path": "chatgpt.com/unauth-mweb/events/performance",
+    "method": "POST",
+    "status": 204,
+    "mime": "",
+    "bytes": 0,
+    "sse": false,
+    "holdsAnswer": false,
+    "carriesPrompt": false,
+    "reqHeaderNames": [
+      "sec-ch-ua-platform",
+      "OAI-Session-Id",
+      "Referer",
+      "x-web-mobile-connectivity-effective-type",
+      "sec-ch-ua",
+      "sec-ch-ua-mobile",
+      "x-web-mobile-document-renderer",
+      "User-Agent",
+      "content-type"
+    ]
+  }
+]

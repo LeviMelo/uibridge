@@ -1,0 +1,11 @@
+URL: https://chatgpt.com/unauth-mweb/assets/partial-island-shared-runtime-native-text-only-client-mobile-composer-assistant-canonical-dil-Bo5BoIF9.js
+METHOD: GET  STATUS: 200  MIME: text/javascript  TYPE: Script  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: Origin, sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+import{mr as e}from"./client-shared-D9QzqXPI.js";var t=`canonical-dil-stream-revision`,n=(n,r)=>e({flush:`sync`,initialValue:r,key:n,namespace:t});export{n as t};

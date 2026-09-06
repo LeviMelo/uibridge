@@ -1,0 +1,11 @@
+URL: https://chatgpt.com/unauth-mweb/assets/conversation-announcements-localized-Dif085Jd.js
+METHOD: GET  STATUS: 200  MIME: text/javascript  TYPE: Script  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: Origin, sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+import{t as e}from"./format-message-DKLa3_Pc.js";var t=()=>({thinking:e(`lightweight-web.conversation.thinking`),complete:e(`lightweight-web.conversation.response-complete`),stopped:e(`lightweight-web.conversation.response-stopped`)});export{t as getConversationAnnouncementMessages};

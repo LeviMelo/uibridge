@@ -1,0 +1,1250 @@
+{
+  "testids": {
+    "desktop-app-shell": {
+      "count": 1,
+      "sample": {
+        "tag": "div",
+        "testid": "desktop-app-shell",
+        "id": null,
+        "role": null,
+        "type": null,
+        "label": "Novo chat Buscar chats Imagens Plugins Investigação Confira",
+        "disabled": null,
+        "visible": true,
+        "box": [
+          0,
+          0,
+          1500,
+          1000
+        ]
+      }
+    }
+  },
+  "editables": [
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-composer-photos-input",
+      "role": null,
+      "type": "file",
+      "label": "",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        497,
+        526,
+        1,
+        1
+      ]
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-composer-files-input",
+      "role": null,
+      "type": "file",
+      "label": "",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        497,
+        526,
+        1,
+        1
+      ]
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-composer-camera-input",
+      "role": null,
+      "type": "file",
+      "label": "",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        497,
+        526,
+        1,
+        1
+      ]
+    },
+    {
+      "tag": "textarea",
+      "testid": null,
+      "id": "mobile-composer-prompt",
+      "role": null,
+      "type": null,
+      "label": "Chat com o ChatGPT",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        553,
+        514,
+        615,
+        24
+      ]
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-auth-email",
+      "role": null,
+      "type": "email",
+      "label": "Endereço de e-mail",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": null,
+      "role": "switch",
+      "type": "checkbox",
+      "label": "",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": null,
+      "role": "switch",
+      "type": "checkbox",
+      "label": "",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": null,
+      "role": "switch",
+      "type": "checkbox",
+      "label": "",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "fileInputs": [
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-composer-photos-input",
+      "role": null,
+      "type": "file",
+      "label": "",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        497,
+        526,
+        1,
+        1
+      ],
+      "accept": "image/*",
+      "multiple": true,
+      "hidden": false
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-composer-files-input",
+      "role": null,
+      "type": "file",
+      "label": "",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        497,
+        526,
+        1,
+        1
+      ],
+      "accept": "image/avif,image/bmp,image/gif,image/heic,image/heif,image/jpeg,image/png,image/webp",
+      "multiple": true,
+      "hidden": false
+    },
+    {
+      "tag": "input",
+      "testid": null,
+      "id": "mobile-composer-camera-input",
+      "role": null,
+      "type": "file",
+      "label": "",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        497,
+        526,
+        1,
+        1
+      ],
+      "accept": "image/*",
+      "multiple": true,
+      "hidden": false
+    }
+  ],
+  "controls": [
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Fechar barra lateral",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        208,
+        4,
+        44,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Buscar chats",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Novo chat",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        60,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": "button",
+      "type": "button",
+      "label": "Buscar chats",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        100,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Entrar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Cadastre-se grátis",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Imagens",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        136,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Plugins",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        172,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": "button",
+      "type": "button",
+      "label": "Investigação",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        208,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Entrar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Cadastre-se grátis",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Confira planos e preços",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        689,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Configurações",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        725,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "OpenAI Ajuda",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        6,
+        761,
+        248,
+        36
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Entrar",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        20,
+        940,
+        220,
+        44
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Novo chat",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Configurações",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "span",
+      "testid": null,
+      "id": null,
+      "role": "button",
+      "type": null,
+      "label": "ChatGPT",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        276,
+        4,
+        92,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Entrar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Cadastre-se grátis",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Entrar",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        1284,
+        4,
+        62,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Cadastre-se grátis",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        1354,
+        4,
+        138,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Deslizar até ao fim",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        858,
+        452,
+        44,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Adicionar arquivos e mais",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        503,
+        504,
+        44,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Câmera",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Fotos",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Arquivos",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Adicionar fotos",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Busca na web",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Criar imagem. Entre para usar.",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Pesquisa aprofundada. Entre para usar.",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Adicionar arquivos. Entre para usar.",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Iniciar ditado",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        1169,
+        504,
+        44,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "submit",
+      "label": "Enviar mensagem",
+      "disabled": true,
+      "visible": true,
+      "box": [
+        1213,
+        504,
+        44,
+        44
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": "t",
+      "role": null,
+      "type": "button",
+      "label": "O que você pode fazer?",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        791,
+        576,
+        177,
+        44
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Termos",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        691,
+        979,
+        37,
+        16
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Política de Privacidade",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        741,
+        979,
+        116,
+        16
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Saiba mais sobre como seus dados são usados para melhorar modelos de IA",
+      "disabled": null,
+      "visible": true,
+      "box": [
+        1287,
+        979,
+        55,
+        16
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "submit",
+      "label": "Fechar",
+      "disabled": true,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Entrar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "submit",
+      "label": "Fechar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Continuar com o Google",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Continuar com Microsoft",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Continuar com a Apple",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Continuar com um telefone",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "submit",
+      "label": "Continuar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "submit",
+      "label": "Fechar",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "submit",
+      "label": "Voltar ao ChatGPT",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Controles de dados",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "button",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": "button",
+      "label": "Configurações",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "tag": "a",
+      "testid": null,
+      "id": null,
+      "role": null,
+      "type": null,
+      "label": "Saiba mais",
+      "disabled": null,
+      "visible": false,
+      "box": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "custom": {},
+  "dataAttrs": {
+    "data-theme=light": 1,
+    "data-contrast=default": 1,
+    "data-build=<value>": 1,
+    "data-close-image-viewer=<value>": 1,
+    "data-conversation-stream-protocol=1": 1,
+    "data-conversation-renderer=react": 1,
+    "data-document-policy-version=1": 1,
+    "data-download-image=Download image": 1,
+    "data-image-viewer=Visualizador de imagens": 1,
+    "data-next-image=Próxima imagem": 1,
+    "data-previous-image=Imagem anterior": 1,
+    "data-conversation-retry-owner=<value>": 1,
+    "data-worker-version-id=<value>": 1,
+    "data-worker-version-override=<value>": 1,
+    "data-conversation-document-affinity=<value>": 1,
+    "data-scripting-enabled=": 1,
+    "data-web-mobile-dpu-parser=native": 1,
+    "data-web-mobile-dpu-transport=polyfilled-stream": 1,
+    "data-beacon-auth-client-ready=": 1,
+    "data-web-mobile-hydrated=": 1,
+    "data-web-mobile-app-stylesheet=": 1,
+    "data-web-mobile-required-module=": 6,
+    "data-web-mobile-critical-styles=": 1,
+    "data-web-mobile-sidebar-critical-styles=": 1,
+    "data-html-setters-polyfill-src=<value>": 1,
+    "data-default-home=": 1,
+    "data-mobile-shell=desktop": 1,
+    "data-new-conversation=": 1,
+    "data-desktop-layout=": 1,
+    "data-desktop-sidebar-swipe-ready=": 1,
+    "data-desktop-sidebar-swipe-compact=false": 1,
+    "data-sidebar-shell-version=m-shell-v2": 1,
+    "data-icon-only=": 10,
+    "data-icon-position=start": 31,
+    "data-icon-shape=non-circular": 28,
+    "data-radius=medium": 1,
+    "data-size=medium": 35,
+    "data-variant=ghost": 19,
+    "data-w-component=button": 34,
+    "data-desktop-sidebar-toggle=": 1,
+    "data-radius=full": 34,
+    "data-variant=secondary": 16,
+    "data-mobile-auth-entry-action=login_or_signup": 6,
+    "data-mobile-auth-entry-point=sidebar_hover_card": 7,
+    "data-mobile-auth-entry-trigger=automatic": 6,
+    "data-mobile-sidebar-auth-item=search_chats": 2,
+    "data-size=large": 2,
+    "data-variant=primary": 7,
+    "data-w-component=link-button": 9,
+    "data-mobile-new-chat=": 2,
+    "data-placement=right-of-sidebar": 2,
+    "data-tone=search": 1,
+    "data-size=small": 6,
+    "data-mobile-auth-entry-action=login": 5,
+    "data-mobile-auth-entry-trigger=cta": 9,
+    "data-mobile-auth-entry-action=signup": 4,
+    "data-icon-shape=circular": 3,
+    "data-mobile-sidebar-auth-item=deep_research": 1,
+    "data-tone=deep-research": 1,
+    "data-rtl-flip=": 2,
+    "data-mobile-auth-entry-point=sidebar_bottom_unit": 1,
+    "data-variant=accent-theme": 1,
+    "data-mobile-header-label=": 1,
+    "data-placement=below-header": 1,
+    "data-tone=chatgpt": 1,
+    "data-mobile-auth-entry-point=mobile_chat_stage_header": 4,
+    "data-swipable-detail-body=": 1,
+    "data-mobile-turn-reserved=": 1,
+    "data-web-mobile-conversation=": 1,
+    "data-conversation-transcript=": 2,
+    "data-web-mobile-optimistic-turn=": 1,
+    "data-message-role=user": 1,
+    "data-user-message-copy=": 1,
+    "data-mobile-initial-scroll-target=": 1,
+    "data-message-role=assistant": 1,
+    "data-message-streaming=": 1,
+    "data-assistant-markdown=": 1,
+    "data-stream-target=": 1,
+    "data-conversation-stream-anchor=": 1,
+    "data-mobile-scroll-to-bottom-threshold-anchor=": 1,
+    "data-swipable-detail-footer=": 1,
+    "data-mobile-landing-heading=": 1,
+    "data-oai-tooltip=": 4,
+    "data-dictation-status=idle": 1,
+    "data-landing=": 1,
+    "data-logged-out=": 1,
+    "data-mobile-composer=": 1,
+    "data-mobile-submit-transition-bubble=": 1,
+    "data-image-picker-input=": 3,
+    "data-composer-action=": 1,
+    "data-oai-tooltip-side=bottom": 3,
+    "data-radius=large": 8,
+    "data-image-picker-input-id=<value>": 4,
+    "data-mobile-auth-entry-point=mobile_bottom_sheet": 3,
+    "data-mobile-composer-prompt=": 1,
+    "data-composer-draft-react=": 1,
+    "data-start-dictation=": 1,
+    "data-visually-disabled=": 1,
+    "data-composer-submit=": 1,
+    "data-send-label=Enviar mensagem": 1,
+    "data-stop-label=Interromper geração": 1,
+    "data-trending-slot=": 1,
+    "data-empty-composer-help=": 1,
+    "data-trending-searches=": 1,
+    "data-trending-searches-heading=": 1,
+    "data-trending-searches-skeleton=": 1,
+    "data-compact-disclaimer=<value>": 1,
+    "data-privacy-notice=": 1,
+    "data-privacy-legal-notice=": 1,
+    "data-desktop-sidebar-swipe-track=": 1,
+    "data-desktop-sidebar-swipe-snap=expanded": 1,
+    "data-desktop-sidebar-swipe-snap=collapsed": 1,
+    "data-shell-action-ids=<value>": 1,
+    "data-shell-disabled-action-ids=": 1,
+    "data-shell-integration-trace=": 1,
+    "data-shell-provider-ids=conversation-actions": 1,
+    "data-shell-slot-ids=<value>": 1,
+    "data-shell-version=m-shell-v2": 1,
+    "data-bottom-sheet=": 2,
+    "data-bottom-sheet-initial-snap=compact": 2,
+    "data-bottom-sheet-input-target=mobile-auth-email": 1,
+    "data-bottom-sheet-presentation=sheet": 1,
+    "data-bottom-sheet-scroller=": 2,
+    "data-bottom-sheet-dismiss-layer=": 2,
+    "data-bottom-sheet-dismiss-button=": 2,
+    "data-bottom-sheet-surface=": 2,
+    "data-bottom-sheet-surface-variant=default": 2,
+    "data-bottom-sheet-handle=": 2,
+    "data-mobile-auth-chatgpt-prefetch=": 1,
+    "data-mobile-auth-dialog=": 1,
+    "data-auth-provider=google": 1,
+    "data-auth-provider=microsoft": 1,
+    "data-icon-p3=microsoft-light-16": 1,
+    "data-auth-provider=apple": 1,
+    "data-auth-provider=phone": 1,
+    "data-auth-provider=email": 1,
+    "data-bottom-sheet-keyboard-region=": 1,
+    "data-mobile-auth-email-invalid-message=E-mail inválido.": 1,
+    "data-bottom-sheet-dismiss-snap=": 2,
+    "data-bottom-sheet-compact-snap=": 2,
+    "data-bottom-sheet-snap=compact": 2,
+    "data-bottom-sheet-snap=full": 2,
+    "data-bottom-sheet-presentation=full-screen": 1,
+    "data-mobile-settings-modal=": 1,
+    "data-sidebar-light-dismiss-ignore=": 1,
+    "data-safety-banners=": 1,
+    "data-conversation-gate=": 1,
+    "data-safety-dialog-queue=": 1,
+    "data-authenticated=0": 1,
+    "data-conversation-announcements=": 1
+  },
+  "runtime": {
+    "url": "https://chatgpt.com/",
+    "title": "ChatGPT: Chat, Work, Create & Code with AI",
+    "globals": [
+      "__ubRecon",
+      "__webMobilePreHydrationState",
+      "__webMobileSafety",
+      "__webMobileDeclarativePartialUpdates",
+      "__webMobilePresentationRuntime",
+      "__webMobileNavigationHistoryDiagnostics",
+      "__webMobileHydrationAdoption",
+      "__webMobileClient",
+      "__oai_so_s",
+      "__oai_so_t0",
+      "__oai_so_h",
+      "__oai_so_hi",
+      "__oai_so_hp",
+      "__oai_so_hw",
+      "__oai_so_k",
+      "__oai_so_fs",
+      "__oai_so_fs2",
+      "__oai_so_fn",
+      "__oai_so_bc",
+      "__oai_so_bm",
+      "__oai_so_uk",
+      "__oai_so_kp",
+      "__oai_so_uin",
+      "__oai_so_we",
+      "__oai_so_wb",
+      "__oai_so_wl",
+      "__oai_so_p",
+      "__oai_so_pc",
+      "__oai_so_m",
+      "__oai_so_i",
+      "__oai_so_ui",
+      "__oai_so_ht",
+      "__oai_so_hc",
+      "__oai_so_ss",
+      "__oai_so_ss2",
+      "__oai_so_sn",
+      "__oai_so_cs",
+      "__oai_so_cs2",
+      "__oai_so_cn",
+      "__oai_so_st"
+    ],
+    "nextData": false,
+    "reactRoot": false,
+    "localStorage": [
+      "lightweight-web.desktop-sidebar-collapsed"
+    ],
+    "sessionStorage": [],
+    "cookieNames": [
+      "oai-did",
+      "oai-mweb-origin",
+      "oai-sc",
+      "g_state"
+    ],
+    "serviceWorkers": 0,
+    "hasWebSocket": 0
+  },
+  "evidence": {
+    "passwordFields": 0,
+    "emailFields": 1,
+    "mentionsLogIn": true,
+    "mentionsChallenge": false,
+    "bodyHead": "Novo chat\nBuscar chats\nImagens\nPlugins\nInvestigação\nConfira planos e preços\nConfigurações\nAjuda\nReceba respostas personalizadas para você\n\nEntre para receber respostas com base em chats salvos, além de criar imagens e carregar arquivos.\n\nEntrar\nChatGPT\nEntrar\nCadastre-se grátis\nPor onde começamos?\nChat com o ChatGPT\nO que você pode fazer?\n\nChatGPT é IA. Ao usá-lo, você concorda com nossos Termos e Política de Privacidade. As conversas podem ser revisadas e usadas para melhorar nossos modelos de IA. Saiba mais"
+  }
+}

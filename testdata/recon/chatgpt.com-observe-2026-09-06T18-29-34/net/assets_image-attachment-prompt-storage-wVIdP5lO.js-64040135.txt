@@ -1,0 +1,11 @@
+URL: https://chatgpt.com/unauth-mweb/assets/image-attachment-prompt-storage-wVIdP5lO.js
+METHOD: GET  STATUS: 200  MIME: text/javascript  TYPE: Script  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: Origin, sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+import{Vn as e,zn as t}from"./client-shared-D9QzqXPI.js";var n=`image-discovery-attachment-prompt`,r=8192,i=e=>{try{sessionStorage.getItem(n)===e&&sessionStorage.removeItem(n)}catch{}},a=(e,i)=>{try{sessionStorage.removeItem(n);let a=t();if(!a||!e||e.length>r||!i?.trim()||i.length>r)return;let o=JSON.stringify({firstPrompt:e,generationPrompt:i,owner:a,createdAt:Date.now(),sourceDocument:performance.timeOrigin});return sessionStorage.setItem(n,o),o}catch{return}},o=()=>{let t=null;try{if(t=sessionStorage.getItem(n),!t)return;if(t.length<=102400){let n=JSON.parse(t);if(typeof n?.firstPrompt==`string`&&n.firstPrompt.length>0&&n.firstPrompt.length<=r&&typeof n.generationPrompt==`string`&&n.generationPrompt.length>0&&n.generationPrompt.length<=r&&(n.firstTurnObserved===void 0||n.firstTurnObserved===!0)&&(n.conversationId===void 0||typeof n.conversationId==`string`&&n.conversationId.length<=256)&&typeof n.sourceDocument==`number`&&Number.isFinite(n.sourceDocument)&&typeof n.createdAt==`number`&&Date.now()-n.createdAt>=0&&Date.now()-n.createdAt<18e5&&e(n.owner))return{serialized:t,value:n}}}catch{}t&&i(t)},s=(e,t,r)=>{try{if(sessionStorage.getItem(n)!==e)return;let i=JSON.stringify({...t,firstTurnObserved:!0,conversationId:r});return sessionStorage.setItem(n,i),i}catch{return}},c=(e,t)=>{try{if(sessionStorage.getItem(n)!==e)return;sessionStorage.setItem(n,JSON.stringify({...t,firstTurnObserved:void 0,conversationId:void 0,sourceDocument:performance.timeOrigin}))}catch{}};export{c as a,a as i,i as n,o as r,s as t};

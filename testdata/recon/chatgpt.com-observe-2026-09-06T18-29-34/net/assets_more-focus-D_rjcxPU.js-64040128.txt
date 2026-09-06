@@ -1,0 +1,11 @@
+URL: https://chatgpt.com/unauth-mweb/assets/more-focus-D_rjcxPU.js
+METHOD: GET  STATUS: 200  MIME: text/javascript  TYPE: Script  STREAMED: true
+SSE: false  HOLDS_ANSWER: false  CARRIES_PROMPT: false
+REQUEST HEADER NAMES: Origin, sec-ch-ua-platform, Referer, User-Agent, sec-ch-ua, sec-ch-ua-mobile
+RESPONSE HEADER NAMES: cache-control, nel, cross-origin-opener-policy, cf-cache-status, etag, content-encoding, report-to, referrer-policy, x-content-type-options, cf-ray, access-control-allow-origin, date, content-type, server
+
+===== REQUEST BODY =====
+(none)
+
+===== RESPONSE BODY =====
+var e=e=>{let t=e.querySelector(`summary`);e.open?e.querySelector(`button`)?.focus({preventScroll:!0}):!e.open&&e.contains(document.activeElement)&&t?.focus({preventScroll:!0})},t=e=>{let t=e.querySelector(`.wm-authenticated-sidebar-more`);t&&(t.open=!1)};export{e as n,t};
