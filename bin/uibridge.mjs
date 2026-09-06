@@ -22,6 +22,7 @@ import { setLevel, logger } from '../src/core/log.mjs'
 import { BridgeError } from '../src/core/errors.mjs'
 import { attachBrowser } from '../src/core/chrome.mjs'
 import { waitFor } from '../src/core/async.mjs'
+import { ensureDaemon, daemonPost, flatten } from '../src/core/client.mjs'
 import { Session } from '../src/session.mjs'
 import { serve } from '../src/api/server.mjs'
 import { providerClass, providerIds } from '../src/providers/registry.mjs'
@@ -59,6 +60,7 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
                                       [--thread=id] [--json]
   uibridge chat <provider>             persistent same-tab conversation
                                       [--thread=id] [--model=id] [--jsonl]
+  uibridge stop                       stop the background uibridge (restart after code changes)
   uibridge export <provider> <id>      export a complete active thread branch
   uibridge export <provider> <id> --files  ...and download every file it generated
                                       [--output=path] [--json]
@@ -314,9 +316,33 @@ async function ask(id, args) {
   // nowhere in stdout or they corrupt the document. Warnings/errors already
   // use stderr, so retain those.
   if (json) setLevel('warn')
-  const session = await Session.open(id, { cfg })
+
+  // Prefer a running uibridge: its browser is already warm and it is the
+  // only process that may drive that Chrome profile. Starting a cold one
+  // per turn was costing ~40s and colliding with `serve`.
+  const daemon = args.includes('--local') ? null : await ensureDaemon(cfg, { log: logger('cli') })
+  const r = daemon
+    ? flatten(
+        await daemonPost(`${daemon.base}/v1/chat/completions`, {
+          model: model ?? id,
+          messages: [{ role: 'user', content: prompt }],
+          files,
+          modes,
+          thread_id: threadId,
+        })
+      )
+    : null
+  const session = daemon ? null : await Session.open(id, { cfg })
   try {
-    const r = await session.ask({ prompt, files, model, modes, threadId })
+    const result = r ?? (await session.ask({ prompt, files, model, modes, threadId }))
+    await printAsk(result, json)
+  } finally {
+    await session?.close()
+  }
+}
+
+async function printAsk(r, json) {
+  {
     if (json) {
       console.log(JSON.stringify(r, null, 2))
       return
@@ -341,8 +367,6 @@ async function ask(id, args) {
     if (r.throttle_notice) console.log(`--- the site is rate-limiting: ${r.throttle_notice}`)
     if (r.ledger?.path) console.log(`--- ledger: ${r.ledger.path}`)
     if (r.ledger?.error) console.log(`--- ledger warning: ${r.ledger.error}`)
-  } finally {
-    await session.close()
   }
 }
 
@@ -361,16 +385,27 @@ function chatOptions(args) {
 async function chat(id, args) {
   const options = chatOptions(args)
   if (options.jsonl) setLevel('warn')
-  const session = await Session.open(id, { cfg })
+  // Same reason as `ask`: one process may drive a given Chrome profile, and
+  // the daemon's tab is already warm and already signed in.
+  const daemon = args.includes('--local') ? null : await ensureDaemon(cfg, { log: logger('cli') })
+  const session = daemon ? null : await Session.open(id, { cfg })
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY })
   let threadId = options.threadId
   let first = true
   const run = async (prompt) => {
     if (!prompt.trim()) return
-    const result = await session.ask({
-      prompt, threadId, model: options.model, modes: options.modes,
-      files: first ? options.files : [],
-    })
+    const files = first ? options.files : []
+    const result = daemon
+      ? flatten(
+          await daemonPost(`${daemon.base}/v1/chat/completions`, {
+            model: options.model ?? id,
+            messages: [{ role: 'user', content: prompt }],
+            files,
+            modes: options.modes,
+            thread_id: threadId,
+          })
+        )
+      : await session.ask({ prompt, threadId, model: options.model, modes: options.modes, files })
     first = false
     threadId = result.thread_id
     if (options.jsonl) console.log(JSON.stringify(result))
@@ -392,7 +427,7 @@ async function chat(id, args) {
     }
   } finally {
     rl.close()
-    await session.close()
+    await session?.close()
   }
 }
 
@@ -403,9 +438,13 @@ async function exportThread(id, args) {
   const json = args.includes('--json')
   if (json) setLevel('warn')
   const requestedPath = args.find((a) => a.startsWith('--output='))?.slice(9)
-  const session = await Session.open(id, { cfg })
+  const wantFiles = args.includes('--files')
+  const daemon = args.includes('--local') ? null : await ensureDaemon(cfg, { log: logger('cli') })
+  const session = daemon ? null : await Session.open(id, { cfg })
   try {
-    const data = await session.exportThread(threadId, { files: args.includes('--files') })
+    const data = daemon
+      ? await daemonPost(`${daemon.base}/v1/threads/export`, { provider: id, thread_id: threadId, files: wantFiles })
+      : await session.exportThread(threadId, { files: wantFiles })
     const path = resolve(requestedPath ?? resolve(ROOT, cfg.exportDir, id, `${threadId}.json`))
     mkdirSync(resolve(path, '..'), { recursive: true })
     writeFileSync(path, JSON.stringify(data, null, 2), 'utf8')
@@ -418,7 +457,15 @@ async function exportThread(id, args) {
       if (data.files?.skipped) console.log(`  files: ${data.files.skipped}`)
       console.log(path)
     }
-  } finally { await session.close() }
+  } finally { await session?.close() }
+}
+
+/** Stop a running uibridge. Code changes need a restart to take effect. */
+async function stopDaemon() {
+  const health = await fetch(`http://${cfg.host}:${cfg.port}/health`).then((r) => r.json()).catch(() => null)
+  if (!health) return console.log(`No uibridge listening on ${cfg.host}:${cfg.port}.`)
+  await fetch(`http://${cfg.host}:${cfg.port}/admin/shutdown`, { method: 'POST' }).catch(() => {})
+  console.log(`Stopped the uibridge on ${cfg.host}:${cfg.port}. Its browser tabs close with it.`)
 }
 
 async function threads(args) {
@@ -523,6 +570,7 @@ try {
   }
   else if (cmd === 'ask') await ask(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'chat') await chat(requireProviderArg(rest[0]), rest.slice(1))
+  else if (cmd === 'stop') await stopDaemon()
   else if (cmd === 'export') await exportThread(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'capture') {
     const continueConversation = rest.includes('--continue')

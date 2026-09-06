@@ -52,6 +52,7 @@ The final chunk carries `_uibridge`, followed by `data: [DONE]`.
 
 ```bash
 node bin/uibridge.mjs serve                 # the API (default 127.0.0.1:8477)
+uibridge stop                               # stop it (a running one keeps the old code)
 node bin/uibridge.mjs login <provider>      # sign in; you type the password, never this tool
 uibridge logout <provider>                  # clear that dedicated profile's site session
 uibridge status [provider] --json           # scriptable authentication verdict
@@ -71,6 +72,23 @@ node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabular
 npm test                                    # 79 unit tests, no browser, ~2s
 python test/live.py                         # live UI-surface suite
 ```
+
+### One browser, not one per command
+
+Every command that needs a browser (`ask`, `chat`, `export`) talks to a
+running uibridge, starting one in the background if none is listening. This
+is not a nicety: only one process may drive a given Chrome profile, so a
+command run while `serve` was up used to fail on a composer that belonged to
+the other process - and a cold start costs about 40 s of Chrome and site
+boot before any prompt is sent.
+
+Measured on the same command and thread: **71 s cold, 14 s against a warm
+daemon**, of which 10.5 s was the model thinking. A `chat` turn is 8-10 s.
+
+`--local` forces the old in-process path for debugging the browser layer.
+A running daemon keeps running the code it started with; `uibridge stop`
+after editing, or the next command reuses the old build. Its log is
+`.uibridge/daemon.log`.
 
 ## What comes back
 

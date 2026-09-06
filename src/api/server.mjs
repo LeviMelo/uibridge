@@ -113,6 +113,20 @@ export function createApp(cfg = loadConfig()) {
       return session.exportThread(threadId, { files: body.files === true })
     },
 
+    /**
+     * Stop this instance. Bound to the loopback interface like the rest of
+     * the API, and it exists because the CLI now starts a daemon on demand:
+     * something has to be able to stop one, and "find the pid yourself" is
+     * not an interface. Code changes do not reach a running instance.
+     */
+    'POST /admin/shutdown': async () => {
+      setTimeout(async () => {
+        for (const [, s] of sessions) await s.close().catch(() => {})
+        process.exit(0)
+      }, 50)
+      return { status: 'stopping' }
+    },
+
     'GET /v1/threads': async () => ({
       threads: await listThreads(resolve(ROOT, cfg.ledgerDir), null),
     }),

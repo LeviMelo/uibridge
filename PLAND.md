@@ -747,3 +747,26 @@ its own contract.
 - ChatGPT's `authCookiePattern` remains an unobserved guess.
 - Latency is dominated by cold page loads in one-shot mode; the persistent
   `chat` tab is the fast path and a warm pool would generalise it.
+
+### 11.1 The CLI is a client, not a second copy (added after live review)
+
+One process may drive one Chrome profile. Every CLI command opening its own
+`Session` therefore had two costs, and the user caught both:
+
+- ~40 s of Chrome and site boot per turn, thrown away at the end of it.
+- Hard collisions: a command issued while `serve` was running waited 60 s
+  for a composer owned by the other process, then failed. A Gemini export
+  failed exactly this way, and a ChatGPT `thread_mismatch` was made worse by
+  it (the underlying cause there was the rate-limit lock, which stops
+  previous conversations from being served while sending still works).
+
+`src/core/client.mjs` makes `ask`, `chat` and `export` clients of a running
+uibridge, starting one detached if none answers `/health`, with its output
+in `.uibridge/daemon.log` (discarding it made failures inside the daemon
+undiagnosable). `--local` keeps the in-process path for debugging the
+browser layer itself, and `uibridge stop` exists because a running daemon
+keeps serving the code it started with - `POST /admin/shutdown`, loopback
+like the rest of the API.
+
+Measured 2026-09-06 on the same command and thread: 71 s cold, 14.3 s warm
+(10.5 s of that the model). `chat` turns: 10.1 s and 8.2 s.
