@@ -11,6 +11,7 @@ import { TabPool } from './core/pool.mjs'
 import { loadConfig, portFor, providerSettings } from './core/config.mjs'
 import { logger, requestId } from './core/log.mjs'
 import { RequestError, SignedOutError } from './core/errors.mjs'
+import { retry } from './core/async.mjs'
 import { providerClass, providerIds } from './providers/registry.mjs'
 
 export class Session {
@@ -113,6 +114,26 @@ export class Session {
     const log = this.#log.child(rid)
     const started = Date.now()
 
+    // Retry only failures a second attempt can genuinely fix, and only once:
+    //   provider_error  the provider's own "something went wrong" message
+    //   compose_failed  the prompt never reached the composer
+    //   submit_failed   it was typed but the send did not take
+    // Timeouts are NOT retried - the model was working, and repeating a
+    // ten-minute wait costs the caller far more than it can recover. Each
+    // attempt gets a fresh tab, because withTab discards a failed one.
+    const RETRYABLE = new Set(['provider_error', 'compose_failed', 'submit_failed'])
+    return retry(
+      () => this.#attempt({ prompt, files: resolved, model, modes, rid, log, started }),
+      {
+        attempts: 2,
+        isRetryable: (e) => RETRYABLE.has(e.code),
+        onRetry: (e) => log.warn(`retrying once after ${e.code}`),
+      }
+    )
+  }
+
+  async #attempt({ prompt, files, model, modes, rid, log, started }) {
+    const resolved = files
     return this.#pool.withTab(async (page) => {
       const provider = this.#provider
       provider.log = log

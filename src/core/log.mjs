@@ -11,7 +11,14 @@ export function setLevel(name) {
   threshold = LEVELS[name] ?? threshold
 }
 
-const stamp = () => new Date().toISOString().slice(11, 23)
+// LOCAL time, not UTC. toISOString() is UTC, so on a UTC-3 machine every log
+// line was three hours off the clock the user is reading - which makes
+// correlating a slow request with what was on screen needlessly hard.
+const stamp = () => {
+  const d = new Date()
+  const p = (n, w = 2) => String(n).padStart(w, '0')
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`
+}
 
 function emit(level, scope, msg) {
   if (LEVELS[level] > threshold) return

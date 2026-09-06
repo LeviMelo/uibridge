@@ -31,7 +31,6 @@
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { Mutex, waitFor } from '../core/async.mjs'
-import { ContractError } from '../core/errors.mjs'
 import { normalizeNewlines } from '../core/markdown.mjs'
 
 // Process-wide: the clipboard is a machine resource, not a per-tab one.
@@ -44,10 +43,10 @@ export const count = (page, sel) =>
     .count()
     .catch(() => 0)
 
-/** Assert a selector still matches something, so UI drift fails loudly. */
-export async function requireSelector(page, provider, key, sel) {
-  if (!(await count(page, sel))) throw new ContractError(provider, key, sel)
-}
+// NOTE: there is deliberately no non-waiting "assert this selector matches"
+// helper here. count() does not auto-wait, so an immediate check reports zero
+// for anything a few frames late and misreads a timing race as UI drift.
+// Use DomProvider.requireContract, which waits before concluding.
 
 /**
  * Is the provider still generating?

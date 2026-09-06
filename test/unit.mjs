@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseTables, parseCodeBlocks, extractJSON, parseMath } from '../src/core/markdown.mjs'
-import { Mutex, waitFor, waitStable } from '../src/core/async.mjs'
+import { Mutex, retry, waitFor, waitStable } from '../src/core/async.mjs'
 import { flattenMessages, readAttachments, readModes } from '../src/api/openai.mjs'
 import { resolveModel, modelCatalogue, providerIds } from '../src/providers/registry.mjs'
 import { RequestError, SignedOutError, ContractError } from '../src/core/errors.mjs'
@@ -164,6 +164,38 @@ test('waitStable: a long answer that merely mentions a placeholder word is accep
     accept: (t) => !!t && !short(t),
   })
   assert.equal(v, answer)
+})
+
+test('retry: retries only what a second attempt can fix', async () => {
+  // The policy matters as much as the mechanism. A provider's own transient
+  // failure is worth one more go; a timeout is not - the model was working,
+  // and repeating a ten-minute wait costs more than it recovers.
+  const RETRYABLE = new Set(['provider_error', 'compose_failed', 'submit_failed'])
+  const isRetryable = (e) => RETRYABLE.has(e.code)
+
+  let calls = 0
+  const recovered = await retry(
+    async () => {
+      calls++
+      if (calls === 1) throw Object.assign(new Error('went wrong'), { code: 'provider_error' })
+      return 'second attempt'
+    },
+    { attempts: 2, isRetryable }
+  )
+  assert.equal(recovered, 'second attempt')
+  assert.equal(calls, 2)
+
+  let timeouts = 0
+  await assert.rejects(() =>
+    retry(
+      async () => {
+        timeouts++
+        throw Object.assign(new Error('too slow'), { code: 'timeout' })
+      },
+      { attempts: 2, isRetryable }
+    )
+  )
+  assert.equal(timeouts, 1, 'a timeout must not be retried')
 })
 
 test('flattenMessages: labels non-user roles instead of dropping them', () => {
