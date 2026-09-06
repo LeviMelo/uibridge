@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).parent))
 from _client import call, require_server  # noqa: E402
 
-CONCURRENCY = 2          # match services.gemini.concurrency in config.json
+CONCURRENCY = 2          # match provider.concurrency in config.json
 
 
 SCHEMA = """Return ONLY a JSON object, no prose:

@@ -3,9 +3,9 @@ Smallest possible use of uibridge. No dependencies - stdlib only.
 
     python examples/hello.py
 
-Needs two things running first:
-  1. npm run serve          (in another terminal - it is the server)
-  2. node login.mjs gemini  (once, ever - signs you in)
+Needs two things first:
+  1. node bin/uibridge.mjs login gemini   (once, ever - you sign in yourself)
+  2. npm run serve                        (another terminal - it is the server)
 """
 import sys
 from pathlib import Path

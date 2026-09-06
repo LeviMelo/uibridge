@@ -35,7 +35,9 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+# The client lives with the examples on purpose: it is the thing a pipeline
+# copies, so the suite exercises exactly what a user would run.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "examples"))
 from _client import BASE, call, require_server  # noqa: E402
 
 DATA = Path(__file__).resolve().parent.parent / "testdata"

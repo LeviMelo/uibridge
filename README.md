@@ -48,7 +48,7 @@ node bin/uibridge.mjs login <provider>      # sign in; you type the password, ne
 node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
 node bin/uibridge.mjs ask gemini "..."      # one prompt, no server
 node bin/uibridge.mjs capture gemini ["p"]  # record DOM + network for calibration
-npm test                                    # 23 unit tests, no browser, ~0.5s
+npm test                                    # 24 unit tests, no browser, ~0.5s
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -82,7 +82,9 @@ src/providers/    contract.mjs   the seam every provider implements
                   dom-provider.mjs  the generic request flow, written once
                   gemini/        selectors.json + its quirks
                   chatgpt/       same shape, not yet calibrated
-src/transports/   extraction as a swappable concern (dom today)
+src/transports/   extraction as a swappable concern:
+                  dom.mjs           copy button, files, completion signals
+                  markdown-dom.mjs  structured fallback when copy is dead
 src/api/          OpenAI mapping, separate from HTTP handling
 src/tools/        capture: record a real exchange for calibration
 bin/uibridge.mjs  CLI
