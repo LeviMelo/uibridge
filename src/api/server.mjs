@@ -11,6 +11,7 @@ import { loadConfig } from '../core/config.mjs'
 import { logger } from '../core/log.mjs'
 import { Session } from '../session.mjs'
 import { listThreads } from '../core/ledger.mjs'
+import { PROTOCOL_VERSION, SERVICE_ID } from '../core/protocol.mjs'
 import { ROOT } from '../core/config.mjs'
 import { resolve } from 'node:path'
 import { modelCatalogue, providerIds, resolveModel } from '../providers/registry.mjs'
@@ -79,6 +80,8 @@ export function createApp(cfg = loadConfig()) {
 
   const routes = {
     'GET /health': async () => ({
+      service: SERVICE_ID,
+      protocol: PROTOCOL_VERSION,
       status: 'ok',
       providers: providerIds,
       default: cfg.defaultProvider,

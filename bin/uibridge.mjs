@@ -22,7 +22,8 @@ import { setLevel, logger } from '../src/core/log.mjs'
 import { BridgeError } from '../src/core/errors.mjs'
 import { attachBrowser } from '../src/core/chrome.mjs'
 import { waitFor } from '../src/core/async.mjs'
-import { ensureDaemon, daemonPost, flatten } from '../src/core/client.mjs'
+import { ensureDaemon, daemonPost, rawHealth, flatten } from '../src/core/client.mjs'
+import { identify, isUibridge } from '../src/core/protocol.mjs'
 import { Session } from '../src/session.mjs'
 import { serve } from '../src/api/server.mjs'
 import { providerClass, providerIds } from '../src/providers/registry.mjs'
@@ -462,8 +463,15 @@ async function exportThread(id, args) {
 
 /** Stop a running uibridge. Code changes need a restart to take effect. */
 async function stopDaemon() {
-  const health = await fetch(`http://${cfg.host}:${cfg.port}/health`).then((r) => r.json()).catch(() => null)
-  if (!health) return console.log(`No uibridge listening on ${cfg.host}:${cfg.port}.`)
+  // Identity first: /health is not proof of being us, and shutting down
+  // whatever unrelated service happens to hold the port would be worse than
+  // doing nothing.
+  const kind = identify(await rawHealth(cfg))
+  if (kind === 'absent') return console.log(`No uibridge listening on ${cfg.host}:${cfg.port}.`)
+  if (!isUibridge(kind)) {
+    return console.log(`Port ${cfg.port} is held by something that is not uibridge. Leaving it alone.`)
+  }
+  if (kind !== 'ours') console.log(`Stopping a uibridge from an older build (${kind}).`)
   await fetch(`http://${cfg.host}:${cfg.port}/admin/shutdown`, { method: 'POST' }).catch(() => {})
   console.log(`Stopped the uibridge on ${cfg.host}:${cfg.port}. Its browser tabs close with it.`)
 }

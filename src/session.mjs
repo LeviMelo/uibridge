@@ -164,13 +164,27 @@ export class Session {
 
       // The state, not a boolean: the caller is told WHAT was observed, which
       // is the difference between an argument and an instruction.
+      // PHASE TIMING. A turn that takes 22s while the model answered in 1.9s
+      // is 20s of something, and "something" is not a diagnosis. Every phase
+      // before submission is timed at debug level so the next person can
+      // read where a slow turn went instead of instrumenting it again.
+      const t0 = Date.now()
+      let mark = t0
+      const phase = (name) => {
+        const now = Date.now()
+        log.debug(`phase ${name}: ${((now - mark) / 1000).toFixed(1)}s (${((now - t0) / 1000).toFixed(1)}s in)`)
+        mark = now
+      }
+
       await provider.prepareAuth(page)
       const session = await provider.sessionState(page)
+      phase('auth')
       if (session.state === 'challenge') throw new ChallengeError(this.id, session.evidence?.challengeText ?? 'a verification challenge')
       if (session.state !== 'in') throw new SignedOutError(this.id, signedOutMessage(this.id, session))
       // Only authenticated sessions are allowed to touch the signed-in UI
       // contract. Anonymous apps often use a different composer entirely.
       await provider.open(page)
+      phase('open')
       const requestedThread = threadId
       if (requestedThread) {
         // A persistent CLI/API session keeps its pooled tab on the thread.
@@ -183,6 +197,7 @@ export class Session {
       } else if (this.#settings.newChatPerRequest) {
         await provider.newConversation(page)
       }
+      phase('thread')
 
       // A blocking notice is a fact to carry, not a reason to stop: on
       // ChatGPT the rate-limit modal locks history, not sending. But it must
@@ -190,6 +205,7 @@ export class Session {
       // one that downloads a generated file.
       const notices = (await provider.dismissNotices?.(page).catch(() => [])) ?? []
       const throttled = notices.find((n) => n.kind === 'rate_limit')?.text ?? null
+      phase('notices')
 
       // Model and modes first: on some providers they cannot be changed once
       // a thread has started, and provenance must describe the turn we send.
@@ -216,8 +232,6 @@ export class Session {
         provenance.final_state = await provider.readState(page).catch(() => null)
       }
 
-      if (resolved.length) await provider.attach(page, resolved)
-
       // A resumed long thread hydrates asynchronously. Taking the baseline
       // while it still has zero responses makes the first old block look
       // like the new answer, so we wait for history before submitting.
@@ -231,26 +245,34 @@ export class Session {
       // anyway; on a DOM one the baseline is merely less certain. So: try,
       // then send regardless, and say in the provenance which it was.
       if (requestedThread) {
-        try {
-          await waitFor(async () => (await provider.responseTexts(page)).length || null, {
-            timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
-            what: 'the existing thread history to load',
-          })
-          await waitStable(async () => JSON.stringify(await provider.responseTexts(page)), {
-            checks: 3, timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
-            what: 'the existing thread history to settle', accept: (value) => value !== '[]',
-          })
-          provenance.history = 'loaded'
-        } catch (e) {
-          provenance.history = 'not_loaded'
-          log.warn(
-            `the thread's previous messages did not render (${e.message}). Sending anyway - ` +
-              (provider.wired
-                ? 'the answer is read off the wire, so the baseline is not needed'
-                : 'the answer is identified against a baseline that may be incomplete')
-          )
+        if (provider.wired) {
+          // ChatGPT's answer is captured from the response stream. Waiting
+          // for old DOM history adds no correctness and, under its history
+          // lock, used to delay every send by a full minute.
+          provenance.history = 'not_required'
+        } else {
+          try {
+            await waitFor(async () => (await provider.responseTexts(page)).length || null, {
+              timeout: this.#settings.historyBaselineMs, poll: this.#settings.pollMs,
+              what: 'the existing thread history baseline to load',
+            })
+            await waitStable(async () => JSON.stringify(await provider.responseTexts(page)), {
+              checks: 3, timeout: this.#settings.historyBaselineMs, poll: this.#settings.pollMs,
+              what: 'the existing thread history baseline to settle', accept: (value) => value !== '[]',
+            })
+            provenance.history = 'loaded'
+          } catch (e) {
+            provenance.history = 'not_loaded'
+            log.warn(`the DOM history baseline did not render quickly (${e.message}); sending anyway`)
+          }
         }
       }
+
+      // Attach only after optional history inspection. A baseline timeout
+      // must never leave the user's file sitting unsent in the composer.
+      phase('history')
+      if (resolved.length) await provider.attach(page, resolved)
+      phase('attach')
 
       const ctx = {
         responseTextsBefore: await provider.responseTexts(page).catch(() => []),
@@ -259,8 +281,10 @@ export class Session {
         threadIdsBefore: await provider.threadIds(page).catch(() => []),
         onProgress,
       }
+      phase('baseline')
       await provider.submit(page, prompt, ctx)
       const tSubmit = Date.now()
+      phase('submit')
 
       await provider.awaitCompletion(page, ctx)
       const result = await provider.extract(page, ctx)

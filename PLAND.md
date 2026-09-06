@@ -7,10 +7,17 @@ rules that are not up for renegotiation.
 Read this before touching code. Most of the expensive mistakes in this
 repo's history were made by assuming something that was cheap to measure.
 
-## CURRENT HANDOFF — 2026-09-06 19:16 America/Sao_Paulo
+## Historical handoff — superseded
+
+The 19:16 handoff below records the state before the work in section 11. It
+is retained as an investigation log, not current status. Thread export was
+subsequently live-verified on a 34-message virtualized ChatGPT thread and on
+Gemini; the current status and remaining work are in section 11.
+
+### Handoff at 19:16 America/Sao_Paulo
 
 The user requested a full-history/virtualization test and asked that the next
-agent continue it. **Do not claim thread export is finished yet.** The tree is
+agent continue it. At that time, thread export was not finished. The tree was
 syntactically valid and all 68 unit tests pass, but the new export path has
 not passed live acceptance because ChatGPT temporarily stopped serving prior
 conversation history after the test traffic.
@@ -64,7 +71,7 @@ conversation history after the test traffic.
   not been calibrated for full-thread export and must not be advertised as
   supporting it yet.
 
-### Exact next steps
+### Steps recorded at that time (now completed or superseded)
 
 1. Let ChatGPT's previous-conversation lock clear. Do not create a new chat.
 2. Run `uibridge export chatgpt
@@ -770,3 +777,60 @@ like the rest of the API.
 
 Measured 2026-09-06 on the same command and thread: 71 s cold, 14.3 s warm
 (10.5 s of that the model). `chat` turns: 10.1 s and 8.2 s.
+
+### 11.2 Audit corrections
+
+- ChatGPT/wire continuations no longer wait for historical DOM at all;
+  `provenance.history` is `not_required`. The former advisory wait could
+  still consume 60 seconds before sending even though history was irrelevant.
+- DOM-only continuations use a short `historyBaselineMs` budget (8 seconds by
+  default), and this check runs before attachments are placed in the composer.
+  Full export alone uses `historyTimeoutMs` (60 seconds).
+- `/health` identifies `service: "uibridge"` and protocol version. The CLI
+  refuses an unrelated/incompatible service on the configured port and no
+  longer silently falls back to a second local browser driver when daemon
+  startup fails.
+
+### 11.3 Where a turn's time actually goes (measured 2026-09-06, phase timing)
+
+The send path now logs every phase before submission at debug level, because
+"22 s for a 1.9 s answer" is an observation, not a diagnosis, and the first
+two guesses (the history wait, then the pacer) were both wrong.
+
+| phase | cold tab | warm tab |
+|---|---|---|
+| auth (`prepareAuth` + `sessionState`) | 11.9 s | 0.2 s |
+| open | 0.0 s | 0.0 s |
+| thread (resume/navigate) | 11.1 s | 0.0 s |
+| notices, history, attach, baseline | 0.3 s | 0.2 s |
+| submit | 1.8 s | 1.4 s |
+| model | 4.4 s | 2.6 s |
+| **total** | **~25 s** | **4.4 s** |
+
+So a warm continuation costs 0.4 s of uibridge before the prompt is sent,
+and every large number ever measured on this path was the FIRST turn after
+a daemon restart - a Chrome tab and the site booting. That is also why
+`uibridge stop` between code changes shows up as a slow next command.
+
+`provenance.history` is `not_required` on ChatGPT: confirmed live, no wait.
+Pacing was NOT involved - a continuation uses `continuationIntervalMs`
+(0 by default), and the debug log shows no pacer wait on these turns.
+
+### 11.4 Honesty of exported text
+
+Every exported message carries `text_source: 'rendered'`. A live ChatGPT
+answer is read off the wire and is the model's own markdown; an exported
+historical one is read back out of the rendered page, so fences and tables
+are reconstructed and maths may be glyphs rather than LaTeX. The field names
+are the same, the provenance is not.
+
+### 11.5 Known limits (not defects, but not to be discovered by surprise)
+
+- Export covers the ACTIVE branch. Regenerated/alternate branches are not
+  walked, and no evidence field claims they are.
+- Historical file retrieval is proven for sandbox (code-interpreter) files.
+  Generated images use other endpoints and are not retrieved.
+- A running daemon serves the code it started with. `/health` now carries
+  `service` and `protocol`; a daemon predating that is recognised as
+  `legacy` - enough to be stopped by `uibridge stop`, never enough to be
+  sent a prompt.

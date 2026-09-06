@@ -1035,3 +1035,76 @@ test('overlapping readings do not duplicate a message', () => {
   mergeReading(store, order, rows('2', '3'), contract)
   assert.equal(orderedMessages(store, order).map((m) => m.id).join(','), '1,2,3')
 })
+
+// --- the daemon is identified, not assumed ---------------------------------
+//
+// The CLI sends prompts to whatever answers the configured port. "It has a
+// /health route" is not evidence that it is uibridge, and a wrong guess
+// means a user's prompt - and their attached files - go to an unrelated
+// local service.
+
+import { createServer as createHttpServer } from 'node:http'
+import { daemonHealth, ensureDaemon } from '../src/core/client.mjs'
+
+async function fakeService(payload, status = 200) {
+  const server = createHttpServer((req, res) => {
+    res.writeHead(status, { 'content-type': 'application/json' })
+    res.end(JSON.stringify(payload))
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  return { server, cfg: { host: '127.0.0.1', port: server.address().port } }
+}
+
+test('a foreign service on the port is refused, not talked to', async () => {
+  const { server, cfg } = await fakeService({ status: 'ok', service: 'grafana' })
+  try {
+    await assert.rejects(() => daemonHealth(cfg), (e) => e.code === 'daemon_incompatible')
+  } finally { server.close() }
+})
+
+test('a uibridge speaking another protocol version is refused', async () => {
+  const { server, cfg } = await fakeService({ status: 'ok', service: 'uibridge', protocol: 99 })
+  try {
+    await assert.rejects(() => daemonHealth(cfg), (e) => e.code === 'daemon_incompatible')
+  } finally { server.close() }
+})
+
+test('a matching uibridge is accepted', async () => {
+  const { server, cfg } = await fakeService({ status: 'ok', service: 'uibridge', protocol: 1 })
+  try {
+    assert.equal((await daemonHealth(cfg)).status, 'ok')
+  } finally { server.close() }
+})
+
+test('nothing listening is not an error, it is an absence', async () => {
+  assert.equal(await daemonHealth({ host: '127.0.0.1', port: 1 }), null)
+})
+
+test('a daemon that will not start fails loudly instead of starting a rival browser', async () => {
+  // Two processes cannot drive one Chrome profile, so falling back to an
+  // in-process browser after a failed start is how the collision returns.
+  await assert.rejects(
+    () => ensureDaemon({ host: '127.0.0.1', port: 1 }, { autostart: false }),
+    (e) => e.code === 'daemon_not_running'
+  )
+})
+
+test('an older uibridge is recognised as ours for stopping, not for prompting', async () => {
+  // Identity was added to a tool that starts itself in the background, so a
+  // daemon predating it can be holding the port. It must be stoppable.
+  const { identify, isUibridge } = await import('../src/core/protocol.mjs')
+  const legacy = { status: 'ok', providers: ['gemini', 'chatgpt'], default: 'gemini', sessions: {} }
+  assert.equal(identify(legacy), 'legacy')
+  assert.equal(isUibridge('legacy'), true)
+  const { server, cfg } = await fakeService(legacy)
+  try {
+    await assert.rejects(() => daemonHealth(cfg), (e) => e.code === 'daemon_incompatible')
+  } finally { server.close() }
+})
+
+test('a foreign service is never mistaken for an old uibridge', async () => {
+  const { identify, isUibridge } = await import('../src/core/protocol.mjs')
+  assert.equal(identify({ status: 'ok' }), 'foreign')
+  assert.equal(identify({ status: 'ok', providers: ['a'] }), 'foreign')
+  assert.equal(isUibridge('foreign'), false)
+})

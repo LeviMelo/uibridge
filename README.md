@@ -82,8 +82,12 @@ command run while `serve` was up used to fail on a composer that belonged to
 the other process - and a cold start costs about 40 s of Chrome and site
 boot before any prompt is sent.
 
-Measured on the same command and thread: **71 s cold, 14 s against a warm
-daemon**, of which 10.5 s was the model thinking. A `chat` turn is 8-10 s.
+Measured on the same command and thread: a warm ChatGPT continuation is
+**4.4 s end to end, 0.4 s of it uibridge** (phase timing: auth 0.2 s, thread
+0.0 s, notices 0.1 s, submit 1.4 s, model 2.6 s). The first turn after a
+daemon starts costs ~25 s, almost all of it Chrome and the site booting
+(auth 11.9 s, thread load 11.1 s) - which is why `uibridge stop` after a
+code change makes the next command look slow.
 
 `--local` forces the old in-process path for debugging the browser layer.
 A running daemon keeps running the code it started with; `uibridge stop`
@@ -347,5 +351,7 @@ images use other endpoints and are not retrieved yet.
   in fifteen minutes during calibration — tripped ChatGPT's throttling, and
   a batch is exactly the caller that would burst. Raise it for long runs;
   never lower it to speed a batch up.
-- There are no fixed sleeps in the request path. Every wait is a condition
-  with a budget; "stopped changing" is a measurement, not padding.
+- Generation waits are condition-driven. A short 600 ms post-modal pause
+  allows the page to rerender; thread export uses small stabilization samples
+  while walking virtualized nodes. ChatGPT continuations never wait for old
+  DOM history; DOM-only providers get an 8-second baseline budget.

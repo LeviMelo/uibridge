@@ -15,6 +15,8 @@ import { spawn } from 'node:child_process'
 import { openSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { ROOT } from './config.mjs'
+import { BridgeError } from './errors.mjs'
+import { identify, isUibridge } from './protocol.mjs'
 
 const base = (cfg) => `http://${cfg.host}:${cfg.port}`
 
@@ -24,22 +26,42 @@ async function get(url, timeoutMs) {
   return res.ok ? res.json() : null
 }
 
-/** The health payload of a listening uibridge, or null. */
-export async function daemonHealth(cfg, timeoutMs = 700) {
+/** Whatever answers /health on the configured port, unjudged. */
+export async function rawHealth(cfg, timeoutMs = 700) {
   return get(`${base(cfg)}/health`, timeoutMs).catch(() => null)
+}
+
+/** The health payload of a listening uibridge of THIS build, or null. */
+export async function daemonHealth(cfg, timeoutMs = 700) {
+  const payload = await rawHealth(cfg, timeoutMs)
+  const kind = identify(payload)
+  if (kind === 'absent') return null
+  if (kind === 'ours') return payload
+  throw new BridgeError(
+    isUibridge(kind)
+      ? `A uibridge from a different build is already on ${cfg.host}:${cfg.port}. ` +
+        'Run `uibridge stop` to replace it with this one - a running daemon keeps serving the code it started with.'
+      : `Port ${cfg.port} is occupied by something that is not uibridge. Refusing to send prompts to it.`,
+    { status: 503, code: 'daemon_incompatible', retryable: false }
+  )
 }
 
 /**
  * A running uibridge, starting one if needed.
  *
- * Returns null when `--local` was asked for or the daemon could not be
- * started - the caller then does the work in-process, which still works,
- * just cold.
+ * Failure is explicit. Silently falling back to a second in-process browser
+ * can make two processes fight over the same Chrome profile.
  */
 export async function ensureDaemon(cfg, { autostart = true, log } = {}) {
   const health = await daemonHealth(cfg)
   if (health) return { base: base(cfg), started: false, health }
-  if (!autostart) return null
+  if (!autostart) {
+    throw new BridgeError(
+      `No uibridge is listening on ${cfg.host}:${cfg.port}, and starting one was not permitted. ` +
+        'Run `uibridge serve`, or pass --local to drive a browser in this process.',
+      { status: 503, code: 'daemon_not_running', retryable: true }
+    )
+  }
 
   log?.info(`starting uibridge on ${cfg.host}:${cfg.port} so this and later commands reuse one warm browser`)
   // The daemon's logs must not land in this command's stdout (--json output
@@ -61,8 +83,11 @@ export async function ensureDaemon(cfg, { autostart = true, log } = {}) {
     const up = await daemonHealth(cfg, 400)
     if (up) return { base: base(cfg), started: true, health: up }
   }
-  log?.warn('the background uibridge did not come up in 20s - doing this in-process instead')
-  return null
+  throw new BridgeError(
+    `The uibridge daemon did not become ready on ${cfg.host}:${cfg.port} within 20s. ` +
+      `See ${resolve(ROOT, '.uibridge', 'daemon.log')}. Use --local only when deliberately debugging without a daemon.`,
+    { status: 503, code: 'daemon_start_failed', retryable: true }
+  )
 }
 
 /**

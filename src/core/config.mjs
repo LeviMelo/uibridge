@@ -34,6 +34,12 @@ const DEFAULTS = {
     // actually takes effect (switching mid-thread is unreliable).
     newChatPerRequest: true,
     readyTimeoutMs: 60000,
+    // Only DOM-extracted continuations need an old-response baseline. This
+    // is deliberately short and never applies to wire extraction.
+    historyBaselineMs: 8000,
+    // Exporting history requests the history itself, so it gets a separate
+    // generous budget rather than borrowing the send-path baseline budget.
+    historyTimeoutMs: 60000,
     // A turn appears within seconds of a real submission. Its own short
     // budget, so a prompt that never got sent fails in a minute instead of
     // sitting for the full response timeout with a misleading message.

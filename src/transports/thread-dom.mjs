@@ -156,6 +156,12 @@ const STEP = (arg) => {
       role: roleOf(el),
       model_slug: attr(el, contract.modelAttr),
       text,
+      // WHERE THIS TEXT CAME FROM. A live ChatGPT answer is read off the
+      // wire and is the model's own markdown; an exported one is read back
+      // out of the rendered page, so fences and tables are reconstructed and
+      // maths may be glyphs. Same field name, different provenance - saying
+      // so is cheaper than a reader discovering it in a meta-analysis.
+      text_source: 'rendered',
       links,
       media,
       attachments,
