@@ -16,3 +16,6 @@ downloads/
 testdata/dom/
 testdata/net/
 testdata/downloads/
+
+# scratch
+_*.mjs
