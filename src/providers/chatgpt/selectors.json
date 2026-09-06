@@ -1,0 +1,67 @@
+{
+  "_": [
+    "THE CHATGPT DOM CONTRACT - NOT YET CALIBRATED.",
+    "",
+    "Every value below is a PLACEHOLDER inferred from the general shape of the",
+    "app, not read off the live page. That distinction matters: in the Gemini",
+    "work, guessed selectors caused three separate silent failures (a wrong",
+    "model picker, a stop control in the wrong language, and an assumption",
+    "that Enter submits), and each one presented as a timeout rather than as a",
+    "bad selector.",
+    "",
+    "So this file is marked calibrated:false, which makes the provider refuse",
+    "to run rather than half-work. To calibrate:",
+    "",
+    "  uibridge login chatgpt      sign in once, in the visible window",
+    "  uibridge capture chatgpt    dump DOM + network for one real exchange",
+    "",
+    "then fill each key from that capture and set calibrated:true. The generic",
+    "flow in ../dom-provider.mjs needs no changes - only this contract.",
+    "",
+    "WORTH CHECKING FIRST for this provider: its response stream is ordinary",
+    "SSE over a documented-looking endpoint, unlike Gemini's obfuscated",
+    "batchexecute. If the capture confirms that, a wire transport here would",
+    "avoid the DOM entirely - which is why extraction is a swappable transport",
+    "rather than something baked into the provider."
+  ],
+
+  "calibrated": false,
+  "url": "https://chatgpt.com/",
+
+  "composer": "div#prompt-textarea[contenteditable='true'], textarea#prompt-textarea",
+  "sendButton": "button[data-testid='send-button'], button[aria-label*='Send' i]",
+  "stopButton": "button[data-testid='stop-button'], button[aria-label*='Stop' i]",
+
+  "responseBlocks": "[data-message-author-role='assistant']",
+  "responseText": ".markdown, .prose",
+  "copyButton": "button[data-testid='copy-turn-action-button'], button[aria-label*='Copy' i]",
+
+  "newChatButton": "a[data-testid='create-new-chat-button'], button[aria-label*='New chat' i]",
+
+  "modelPicker": "button[data-testid='model-switcher-dropdown-button']",
+  "modelOption": "[role='menuitem'], [role='option']",
+  "pickerStrategy": "separate",
+  "models": {},
+  "_models": [
+    "Left empty on purpose. Inventing ids here would make /v1/models",
+    "advertise models that may not exist on this account - the plan is",
+    "inverted: read the picker during calibration, then write down what is",
+    "actually there."
+  ],
+  "modes": {},
+
+  "attachStrategy": "file-input",
+  "fileInput": "input[type='file']",
+  "attachmentChip": "[data-testid*='attachment'], [class*='attachment']",
+  "uploadingText": "Uploading",
+
+  "sourceChip": null,
+  "generatedFile": null,
+
+  "transientText": ["Searching", "Thinking", "Reasoning"],
+  "searchTransient": "Searching the web|Searching",
+
+  "signedOutMarker": "Log in|Sign up|Stay logged out",
+  "accountMarker": "[data-testid='profile-button'], button[aria-label*='Account' i]",
+  "challengeText": "unusual activity|verify you are human|not a robot|Just a moment"
+}

@@ -1,8 +1,8 @@
 """
 UI-surface suite for uibridge.
 
-    python examples/ui_surface.py            # all checks
-    python examples/ui_surface.py file table # only checks whose name matches
+    python test/live.py            # all checks
+    python test/live.py file table # only checks whose name matches
 
 WHAT THIS TESTS: the Gemini UI, and only the UI.
 

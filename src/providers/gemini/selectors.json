@@ -1,0 +1,162 @@
+{
+  "_": [
+    "THE GEMINI DOM CONTRACT. Every value here was read off the live page, not",
+    "guessed - three separate outages in the prototype came from guessing.",
+    "This is the ONE file to edit when Gemini's UI changes; nothing outside",
+    "this directory contains a Gemini selector.",
+    "",
+    "Selectors carry both English and Portuguese labels because the account",
+    "language changes the aria-labels, and an English-only stopButton made",
+    "completion detection fail silently on a pt-BR session."
+  ],
+  "url": "https://gemini.google.com/app",
+  "composer": "div.ql-editor[contenteditable='true'], rich-textarea div[contenteditable='true']",
+  "_composer": [
+    "A Quill editor, not a textarea, so setInputFiles/fill do not apply.",
+    "Two nodes match; the first is the live one. Wait for VISIBLE, not merely",
+    "present: a leftover file-viewer overlay leaves it attached but hidden,",
+    "and waiting on presence then hangs for the full timeout."
+  ],
+  "sendButton": "button[aria-label*='Send' i], button[aria-label*='Enviar' i], button.send-button",
+  "_sendButton": [
+    "Enter does NOT submit on this build - verified directly. The button is",
+    "the only path, and it stays enabled throughout, so its state says",
+    "nothing about readiness or completion."
+  ],
+  "stopButton": "button[aria-label*='Stop response' i], button[aria-label*='Stop' i], button[aria-label*='Parar' i]",
+  "_stopButton": "Visible only while generating: the primary completion signal.",
+  "responseBlocks": "model-response",
+  "responseText": "message-content, .markdown",
+  "copyButton": "message-actions button[aria-label*='Copy' i], copy-button button",
+  "_copyButton": [
+    "Returns Gemini's ORIGINAL MARKDOWN - pipe tables, intact LaTeX, fenced",
+    "code. innerText returns none of that. message-actions holds exactly",
+    "['Good response','Bad response','Copy','Show more options']."
+  ],
+  "newChatButton": "button[aria-label*='New chat' i], button[aria-label*='Nova conversa' i], a[aria-label*='New chat' i]",
+  "modelPicker": "button[aria-label*='mode picker' i], button[aria-label*='seletor de modo' i], button[aria-label*='mode selector' i], button[aria-label*='model' i]",
+  "modelOption": "[role='menuitem']",
+  "_modelPicker": [
+    "One control carries TWO dimensions: the model and the extended-thinking",
+    "toggle. Its aria-label reads 'Open mode picker, currently Flash' and",
+    "gains 'Extended' when thinking is on - that label is the only readable",
+    "confirmation of either setting, which is why provenance comes from here."
+  ],
+  "models": {
+    "gemini-flash-lite": {
+      "match": "Flash-Lite",
+      "verify": "Flash-Lite"
+    },
+    "gemini-flash": {
+      "match": "Flash(?!-)",
+      "verify": "Flash(?!-)"
+    },
+    "gemini-pro": {
+      "match": "\\bPro\\b",
+      "verify": "\\bPro\\b"
+    }
+  },
+  "_models": [
+    "Flash must not match Flash-Lite, hence the negative lookahead. Gemini",
+    "CAN sometimes switch model mid-thread, but unreliably and often only",
+    "after several turns - a Gemini-side bug - so each request opens a fresh",
+    "conversation and selects there, which is deterministic."
+  ],
+  "modes": {
+    "thinking": {
+      "option": "Extended thinking|Racioc[ií]nio estendido",
+      "onLabel": "Extended"
+    }
+  },
+  "dropTarget": "input-area-v2, input-container, rich-textarea",
+  "attachmentChip": "uploader-file-preview",
+  "uploadingText": "Uploading file|Enviando arquivo|Fazendo upload",
+  "_upload": [
+    "Uploads go through a CDP-dispatched (trusted) drag event. A synthetic",
+    "new DragEvent() is IGNORED - tested against document, window, body,",
+    "input-area-v2, input-container, rich-textarea, .ql-editor, chat-window",
+    "and main: zero attachments every time. There is no input[type=file] to",
+    "target, and the 'Upload & tools -> Files' menu opens an OS dialog and is",
+    "flaky, so it is only a fallback.",
+    "",
+    "Readiness is uploader-file-preview appearing AND the uploading text",
+    "going away. Watching the send button instead never works: it is enabled",
+    "the whole time, so the prompt gets sent before the file has landed."
+  ],
+  "sourceChip": "source-inline-chip, source-footnote, sources-carousel-inline",
+  "_sourceChip": [
+    "sources-list is present in EVERY response, so including it made",
+    "browsed=true unconditionally. source-inline-chip is the real signal."
+  ],
+  "moreButton": "message-actions button[aria-label*='More' i], message-actions button[data-test-id*='more' i]",
+  "viewSourcesItem": "[data-test-id='sources-menu-button'], [role='menuitem']:has-text('View sources')",
+  "sourcePanelLink": "a[href^='http']",
+  "sourceIgnoreHosts": [
+    "accounts.google.",
+    "support.google.",
+    "policies.google.",
+    "myactivity.google.",
+    "gemini.google.",
+    "/intl/",
+    "about/products"
+  ],
+  "_sources": [
+    "Citations are exposed properly behind the message's '...' menu -> View",
+    "sources, which gives real URLs with text fragments. Scraping the body",
+    "chips alone misses them. The ignore list strips Google's own chrome",
+    "(account, policies, product pages) that shares the panel's markup."
+  ],
+  "generatedFile": {
+    "toolMarker": ".contains-extensions-response",
+    "chip": "generated-file",
+    "name": "[data-test-id='file-name']",
+    "type": ".file-type-lr",
+    "open": "gem-button.open-button button, .open-button button, .chip-lr",
+    "download": "[aria-label='Download'], [data-tooltip='Download']",
+    "close": "[aria-label='Close'], [data-tooltip='Close']"
+  },
+  "_generatedFile": [
+    "Gemini emits REAL files. The chip is <generated-file> with the true name",
+    "in [data-test-id=file-name]@title, e.g. pediatric_trial_data.csv.",
+    "",
+    "There is no <a download> and no blob: href anywhere, so a scan for",
+    "download affordances returns nothing - which is exactly how a real",
+    "generated CSV gets mistaken for 'just a code block'. 'Open' opens a",
+    "Drive-style viewer overlay IN THE SAME PAGE whose toolbar is",
+    "div[role=button] (Print / Download / More actions), NOT <button>, so",
+    "button[aria-label*=Download] only ever matches the code block's",
+    "'Download code'. Clicking div[aria-label=Download] fires a genuine",
+    "browser download. Verified end to end: 422 bytes of real CSV on disk.",
+    "",
+    "toolMarker gates the whole lookup: .contains-extensions-response is",
+    "added only when the code/extension tool ran (checked across six output",
+    "types), so plain answers never wait for a file that cannot exist."
+  ],
+  "transientText": [
+    "Pesquisando na internet",
+    "Searching the internet",
+    "Analisando",
+    "Analyzing",
+    "Pensando",
+    "Thinking"
+  ],
+  "searchTransient": "Searching the internet|Searching the web|Pesquisando na internet|Pesquisando",
+  "_transient": [
+    "Placeholder text that appears BEFORE the answer. Treating it as the",
+    "answer returns 'Searching the internet' as the model's reply.",
+    "thinking-overlay is NOT a thinking indicator - it is present in every",
+    "response, so it cannot be used for this."
+  ],
+  "signedOutMarker": "Faça login|Fazer login|Sign in to access|Sign in",
+  "accountMarker": "a[aria-label*='Conta do Google' i], a[aria-label*='Google Account' i], img[alt*='@'], [data-test-id='account-menu-button']",
+  "challengeText": "unusual traffic|tráfego incomum|verify you|not a robot",
+  "_signIn": [
+    "A rendered composer does NOT mean signed in: an anonymous session shows",
+    "one too, and requests then run against no account. Sign-in must be",
+    "confirmed from a real account marker."
+  ],
+  "attachStrategy": "cdp-drag",
+  "_attachStrategy": "Synthetic DragEvents are ignored and there is no input[type=file]; CDP dispatches a trusted drag that takes file paths.",
+  "pickerStrategy": "combined",
+  "_pickerStrategy": "One control carries model AND extended thinking; its aria-label is the only readable state for either."
+}

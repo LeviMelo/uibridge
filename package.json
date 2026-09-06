@@ -1,12 +1,19 @@
 {
   "name": "uibridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "OpenAI-compatible local endpoint backed by chat UI sessions in a real browser",
+  "description": "A local OpenAI-compatible API backed by chat UI sessions in a real browser",
+  "bin": {
+    "uibridge": "bin/uibridge.mjs"
+  },
   "scripts": {
-    "login": "node login.mjs",
-    "serve": "node server.mjs"
+    "serve": "node bin/uibridge.mjs serve",
+    "login": "node bin/uibridge.mjs login",
+    "doctor": "node bin/uibridge.mjs doctor",
+    "capture": "node bin/uibridge.mjs capture",
+    "test": "node --test test/unit.mjs",
+    "test:live": "python test/live.py"
   },
   "dependencies": {
     "playwright": "^1.49.0"
