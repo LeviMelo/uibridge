@@ -113,6 +113,10 @@ export function completionResponse({ modelId, result, provider }) {
       citations: result.citations ?? [],
       // The stream ended before the site said it was done.
       truncated: result.truncated ?? false,
+      // The site's own "too many requests" notice, when it was showing. The
+      // request still went through (new chats work while it shows); a batch
+      // seeing this should slow down.
+      throttle_notice: result.throttle_notice ?? null,
       json: extractJSON(result.text),
     },
   }

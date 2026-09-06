@@ -192,5 +192,17 @@
     "                 simple view is up is intercepted by that panel.",
     "One Escape steps back a panel; a second closes the popover. The header",
     "has no model-switcher button on this build."
+  ],
+  "throttleText": "solicitações rápido demais|Limitamos temporariamente o acesso|too many requests|temporarily limited",
+  "_throttleText": [
+    "SEEN 2026-09-06 after a burst of calibration requests. The site says:",
+    "  'Você está fazendo solicitações rápido demais. Limitamos temporariamente",
+    "   o acesso às suas conversas para proteger seus dados. Aguarde alguns",
+    "   minutos antes de tentar novamente'",
+    "It is a per-user safety lock, not a bot challenge: NEW chats still send",
+    "and answer normally, only previous conversations are unreachable for a",
+    "few minutes. So it is reported (notice + log), never treated as signed-out",
+    "or as a UI change, and the pacer (minIntervalMs) exists so it is not",
+    "triggered in the first place."
   ]
 }

@@ -67,6 +67,7 @@ honest about what happened rather than to look tidy:
 | `extraction` | Which tier produced the text: `wire` (the response body the page received — the model's own markdown, ChatGPT), `copy` (the provider's own markdown via its copy control), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
 | `provenance.answered_by`, `provenance.sent_as` | Wire only. The slug the *server* says answered, and the model the page put in its own request. When a model was requested, `provenance.model.verified` is re-checked against `answered_by`, which outranks any picker label. |
 | `citations` | Wire only. Each inline citation with `at`, the character offset in the content where the claim it supports is made, plus `url`, `title`, `site`, `snippet`. `sources` is everything the turn consulted; `citations` is what the answer leans on. |
+| `throttle_notice` | The site's own "too many requests" text when it was showing. On ChatGPT that lock only blocks *previous* conversations; the request still went through. A batch seeing it should slow down. |
 | `truncated` | `true` when the stream ended before the site said it was done. The text is whatever arrived. |
 | `markdown` | `true` for either markdown tier. |
 | `lossy_math` | `true` when maths was rendered but its source is not in the DOM, so the formula is glyphs rather than LaTeX. Never passed off as source. |
@@ -78,7 +79,7 @@ honest about what happened rather than to look tidy:
 
 Errors are typed, so a caller can branch: `401 signed_out`, `503 challenge`,
 `400 invalid_request`, `502 ui_contract` (the UI changed), `504 timeout`,
-`501 not_calibrated`. An error is something that stopped a message from being
+`501 not_calibrated`, `429 rate_limited`. An error is something that stopped a message from being
 retrieved. A message that *was* retrieved always comes back as a 200, even
 when the provider used it to say it failed.
 

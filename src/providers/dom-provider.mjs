@@ -114,6 +114,25 @@ export class DomProvider extends Provider {
     return v.state === 'in'
   }
 
+  /**
+   * The site's own "you are going too fast" notice, if it is showing.
+   *
+   * On ChatGPT this is a per-user safety lock ("Limitamos temporariamente o
+   * acesso às suas conversas para proteger seus dados"): new chats still
+   * work, history is locked for a few minutes. So it is returned as a fact
+   * for the caller, not raised - raising would turn a working request into
+   * a failure, and calling it "signed out" or "UI changed" would send
+   * someone debugging the wrong thing.
+   */
+  async throttleNotice(page) {
+    if (!this.sel.throttleText) return null
+    const body = await page.locator('body').innerText().catch(() => '')
+    const m = body.match(new RegExp(this.sel.throttleText, 'i'))
+    if (!m) return null
+    const line = body.split(String.fromCharCode(10)).find((l) => new RegExp(this.sel.throttleText, 'i').test(l)) ?? m[0]
+    return line.trim().slice(0, 200)
+  }
+
   async assertNoChallenge(page) {
     if (!this.sel.challengeText) return
     const body = await page.locator('body').innerText().catch(() => '')
@@ -544,9 +563,12 @@ export class DomProvider extends Provider {
         const j = JSON.parse(res.body)
         detail = j?.detail?.message ?? j?.detail ?? j?.error?.message ?? detail
       } catch {}
+      const limited = res.status === 429
       throw new BridgeError(
-        `${this.id}: the site refused the request with HTTP ${res.status}: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}`,
-        { status: 502, code: 'upstream_refused', retryable: res.status === 429 || res.status >= 500, detail: { status: res.status } }
+        `${this.id}: the site ${limited ? 'rate-limited' : 'refused'} the request with HTTP ${res.status}: ` +
+          `${typeof detail === 'string' ? detail : JSON.stringify(detail)}` +
+          (limited ? '. Wait a few minutes; raise minIntervalMs in config.json for this provider.' : ''),
+        { status: limited ? 429 : 502, code: limited ? 'rate_limited' : 'upstream_refused', retryable: limited || res.status >= 500, detail: { status: res.status } }
       )
     }
     const decoded = decodeDeltaStream(res.body)
