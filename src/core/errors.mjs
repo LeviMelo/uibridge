@@ -27,12 +27,28 @@ export class BridgeError extends Error {
 
 /** The provider needs a human to sign in. No amount of retrying fixes it. */
 export class SignedOutError extends BridgeError {
-  constructor(provider) {
-    super(`Not signed in to ${provider}. Run: uibridge login ${provider}`, {
+  /**
+   * Carries the EVIDENCE, not just the verdict.
+   *
+   * "Not signed in" invites the reply "yes I am, look at my browser". Naming
+   * what was actually observed - no session cookie, the anonymous bundle
+   * being served - turns an argument into an instruction. The message is
+   * built by signedOutMessage() so the terminal, the HTTP body and the log
+   * all say exactly the same thing.
+   */
+  constructor(provider, message) {
+    super(message ?? `Not signed in to ${provider}. Run: uibridge login ${provider}`, {
       status: 401,
       code: 'signed_out',
     })
     this.provider = provider
+    this.action = `node bin/uibridge.mjs login ${provider}`
+  }
+
+  toJSON() {
+    const base = super.toJSON()
+    if (base?.error) base.error.action = this.action
+    return base
   }
 }
 

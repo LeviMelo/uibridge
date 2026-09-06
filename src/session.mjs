@@ -10,7 +10,8 @@ import { attachBrowser } from './core/chrome.mjs'
 import { TabPool } from './core/pool.mjs'
 import { loadConfig, portFor, providerSettings } from './core/config.mjs'
 import { logger, requestId } from './core/log.mjs'
-import { BridgeError, RequestError, SignedOutError } from './core/errors.mjs'
+import { BridgeError, ChallengeError, RequestError, SignedOutError } from './core/errors.mjs'
+import { signedOutMessage } from './core/auth.mjs'
 import { retry } from './core/async.mjs'
 import { providerClass, providerIds } from './providers/registry.mjs'
 
@@ -62,12 +63,22 @@ export class Session {
     return this.#pool.stats
   }
 
-  /** Is a human signed in? Cheap enough to call before a batch. */
-  async signedIn() {
+  /**
+   * The session verdict WITH its evidence.
+   *
+   * Returns the state rather than a boolean because "not signed in" is not
+   * actionable on its own - what makes it actionable is naming what was
+   * observed and what to type next.
+   */
+  async sessionState() {
     return this.#pool.withTab(async (page) => {
       await this.#provider.open(page).catch(() => {})
-      return this.#provider.isSignedIn(page)
+      return this.#provider.sessionState(page)
     })
+  }
+
+  async signedIn() {
+    return (await this.sessionState()).state === 'in'
   }
 
   /**
@@ -142,7 +153,11 @@ export class Session {
       provider.log = log
 
       await provider.open(page)
-      if (!(await provider.isSignedIn(page))) throw new SignedOutError(this.id)
+      // The state, not a boolean: the caller is told WHAT was observed, which
+      // is the difference between an argument and an instruction.
+      const session = await provider.sessionState(page)
+      if (session.state === 'challenge') throw new ChallengeError(this.id, session.evidence?.challengeText ?? 'a verification challenge')
+      if (session.state !== 'in') throw new SignedOutError(this.id, signedOutMessage(this.id, session))
       if (this.#settings.newChatPerRequest) await provider.newConversation(page)
 
       // Model and modes first: on some providers they cannot be changed once

@@ -150,6 +150,24 @@
   "signedOutMarker": "Faça login|Fazer login|Sign in to access|Sign in",
   "accountMarker": "a[aria-label*='Conta do Google' i], a[aria-label*='Google Account' i], img[alt*='@'], [data-test-id='account-menu-button']",
   "challengeText": "unusual traffic|tráfego incomum|verify you|not a robot",
+  "auth": {
+    "authCookiePattern": "^(__Secure-[13]PSID|SID)$",
+    "signedOutPattern": "Faça login|Fazer login|Sign in to access|Sign in",
+    "accountMarker": "a[aria-label*='Conta do Google' i], a[aria-label*='Google Account' i], img[alt*='@'], [data-test-id='account-menu-button']",
+    "challengePattern": "unusual traffic|tráfego incomum|verify you|not a robot"
+  },
+  "_auth": [
+    "VERIFIED 2026-09-06 against this live signed-in profile: the cookie jar",
+    "held SID, __Secure-1PSID and __Secure-3PSID, and the pattern matched all",
+    "three.",
+    "",
+    "HOW SIGNED-IN IS PROVEN, strongest signal first. Google keeps no",
+    "same-origin session endpoint we can call, so the cookie jar is the",
+    "authority here: those names are httpOnly, which is exactly why",
+    "document.cookie cannot see them and the browser context must be asked",
+    "instead. The DOM markers below rank last - they are a guess about a",
+    "translated string, and this account renders in pt-BR."
+  ],
   "_signIn": [
     "A rendered composer does NOT mean signed in: an anonymous session shows",
     "one too, and requests then run against no account. Sign-in must be",

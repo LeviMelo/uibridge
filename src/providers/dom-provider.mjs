@@ -17,6 +17,7 @@
 import { resolve as resolvePath } from 'node:path'
 import { Provider, Capabilities } from './contract.mjs'
 import { BridgeError, ChallengeError, ContractError, SignedOutError, TimeoutError } from '../core/errors.mjs'
+import { sessionState, signedOutMessage } from '../core/auth.mjs'
 import { waitFor, waitStable } from '../core/async.mjs'
 import { parseCodeBlocks, parseTables } from '../core/markdown.mjs'
 import {
@@ -76,19 +77,32 @@ export class DomProvider extends Provider {
       try {
         await composer()
       } catch {
-        throw new SignedOutError(this.id)
+        throw new SignedOutError(this.id, signedOutMessage(this.id, await this.sessionState(page).catch(() => null)))
       }
     }
   }
 
+  /**
+   * The full verdict, with the evidence that produced it.
+   *
+   * Ranked in ../core/auth.mjs: a session cookie or the app's own session
+   * endpoint outranks anything read off the page, because page text is a
+   * guess about a translation - this account renders Gemini in pt-BR - and
+   * because the strongest signal of all is which APPLICATION the server
+   * chose to serve.
+   */
+  async sessionState(page) {
+    return sessionState(page, this.sel.auth ?? {})
+  }
+
   async isSignedIn(page) {
-    const s = this.sel
-    // A rendered composer proves nothing: an anonymous session shows one too,
-    // and every request then runs against no account at all.
-    if (s.accountMarker && (await count(page, s.accountMarker))) return true
-    if (!s.signedOutMarker) return true
-    const body = await page.locator('body').innerText().catch(() => '')
-    return !new RegExp(s.signedOutMarker, 'i').test(body)
+    // Note the shape of the version this replaced: it returned TRUE when it
+    // had nothing to go on. A rendered composer proves nothing - these sites
+    // serve a whole anonymous app, so a signed-out request does not fail, it
+    // answers from a weaker model with nothing to mark it. Only a positive
+    // proof counts now.
+    const v = await this.sessionState(page)
+    return v.state === 'in'
   }
 
   async assertNoChallenge(page) {

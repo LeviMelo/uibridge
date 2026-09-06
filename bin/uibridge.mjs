@@ -23,6 +23,11 @@ import { serve } from '../src/api/server.mjs'
 import { providerClass, providerIds } from '../src/providers/registry.mjs'
 import { captureExchange } from '../src/tools/capture.mjs'
 import { reconObserve, reconExchange } from '../src/tools/recon.mjs'
+import { awaitSignIn } from '../src/core/signin.mjs'
+import { checkAnonymousDetection } from '../src/tools/anoncheck.mjs'
+import { signedOutMessage, sessionState } from '../src/core/auth.mjs'
+
+const nlLiteral = String.fromCharCode(10)
 
 const [, , cmd, ...rest] = process.argv
 if (process.env.UIBRIDGE_LOG) setLevel(process.env.UIBRIDGE_LOG)
@@ -37,6 +42,7 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge serve                      start the API (default port ${cfg.port})
   uibridge login <provider>           open a window and sign in
   uibridge doctor [provider]          verify Chrome, session and UI contracts
+  uibridge doctor <provider> --anon   prove signed-OUT is detected (throwaway profile)
   uibridge ask <provider> "prompt"    single prompt, no server
   uibridge capture <provider> ["p"]   record DOM + network for one exchange
   uibridge recon observe <url>        describe an UNKNOWN site: DOM + network
@@ -57,48 +63,117 @@ function requireProviderArg(name) {
 }
 
 /**
- * Open a visible window and wait for a REAL account.
+ * Sign in: a guided flow, not a window that appears and hopes.
  *
- * A rendered composer is not proof of sign-in - an anonymous session shows
- * one too, and requests then run against no account, which is how a whole
- * batch can come back subtly wrong. So this waits for an account marker and
- * says plainly what it is waiting for.
+ * The person this is aimed at is looking at Chrome, not at this terminal, so
+ * the instructions are painted INTO the page as well as printed here, the
+ * window opens on the provider's real page rather than a blank tab, and the
+ * banner turns green and names the account when detection flips. Everything
+ * about it is designed so that "what is this window and what do I do with it"
+ * never has to be asked.
+ *
+ * Works on an uncalibrated provider on purpose: signing in has to come BEFORE
+ * calibration, since the signed-out site is a different application and
+ * calibrating against it would record the wrong selectors.
  */
 async function login(id) {
   const Class = providerClass(id)
   const settings = providerSettings(cfg, id, Class.defaults)
   const url = Class.selectors.url
+  const auth = Class.selectors.auth ?? {}
+
   const { ctx } = await attachBrowser({
     port: portFor(cfg, id, providerIds.indexOf(id)),
     userDataDir: settings.profileDir,
     headless: false,
     clipboardOrigins: [new URL(url).origin],
   })
-  const page = ctx.pages()[0] ?? (await ctx.newPage())
-  await page.goto(url, { waitUntil: 'domcontentloaded' })
+  // One tab, not a pile of them. Earlier runs left a blank window per
+  // attempt, which is how a sign-in prompt turns into visual noise the user
+  // learns to close.
+  const pages = ctx.pages()
+  const page = pages[0] ?? (await ctx.newPage())
+  for (const p of pages.slice(1)) await p.close().catch(() => {})
 
-  const provider = new Class({ selectors: Class.selectors, settings: { ...settings, url }, log })
-  console.log(`\nA Chrome window is open on ${url}.`)
-  console.log('Sign in there yourself - this tool never handles your password.')
-  console.log('Waiting for a signed-in session...\n')
+  console.log(`
+  Signing in to ${id}
+  ------------------------------------------------------------------
+  A Chrome window is opening on ${url}.
+  It belongs to uibridge and shows a blue banner explaining itself.
 
-  let last = ''
-  await waitFor(
-    async () => {
-      const ok = await provider.isSignedIn(page).catch(() => false)
-      if (ok) return true
-      const body = await page.locator('body').innerText().catch(() => '')
-      const state = /unusual traffic|verify you|not a robot/i.test(body)
-        ? 'waiting: a verification challenge is showing - please clear it'
-        : 'waiting: not signed in yet'
-      if (state !== last) console.log(`  ${state}`)
-      last = state
-      return null
-    },
-    { timeout: 15 * 60 * 1000, poll: 1500, what: 'you to sign in' }
-  )
-  console.log('\nSIGNED IN. The session is stored in the profile; you can close the window.')
-  console.log('It persists across restarts - .profiles/ is gitignored because it holds it.')
+    1. Sign in there with your own account, as you normally would.
+    2. Leave the window open; this detects the session by itself.
+    3. The banner turns green when it is done.
+
+  uibridge never sees or types your password. The session is stored in
+  this browser profile (${settings.profileDir}) and persists across
+  restarts, so this is a one-time step.
+`)
+
+  const verdict = await awaitSignIn({ page, providerId: id, url, auth, log })
+
+  if (verdict.state === 'in') {
+    console.log(`
+  SIGNED IN.
+  Proven by: ${verdict.authority}
+${(verdict.because ?? []).map((b) => `    - ${b}`).join(nlLiteral)}
+
+  You can close the window. Next: node bin/uibridge.mjs doctor ${id}
+`)
+    // The cookie jar is how a session is proven on the next run, so record
+    // what is actually there. On a provider whose auth block was written
+    // from a signed-OUT page, this is the measurement that confirms or
+    // corrects it - rather than leaving a guess in place that happens to
+    // work today.
+    const named = (verdict.evidence?.cookies ?? []).filter((c) => c.httpOnly && c.chars > 20)
+    if (named.length) {
+      console.log(`  httpOnly cookies now in this profile (candidates for auth.authCookiePattern):`)
+      console.log(`    ${named.map((c) => c.name).join(', ')}
+`)
+    }
+    process.exit(0)
+  }
+
+  console.log(`
+  NOT signed in yet - ${verdict.authority}.
+  Nothing was changed. Run this again when you are ready:
+      node bin/uibridge.mjs login ${id}
+`)
+  process.exit(1)
+}
+
+/**
+ * Print a session verdict the way a person needs to read it: the state, what
+ * proved it, and - when it is bad news - the one command that fixes it.
+ */
+function printSession(v) {
+  const line = {
+    in: 'signed in',
+    anonymous: 'SIGNED OUT (the site is serving its anonymous app)',
+    challenge: 'BLOCKED by a verification challenge - clear it yourself in the window',
+    unknown: 'UNKNOWN - treated as signed out',
+  }[v.state ?? 'unknown']
+  console.log(`  session   : ${line}`)
+  console.log(`              why: ${v.authority}`)
+  for (const b of v.because ?? []) console.log(`                   ${b}`)
+}
+
+/** Session state for a provider we cannot fully open (e.g. uncalibrated). */
+async function peekSession(id, sel) {
+  const settings = providerSettings(cfg, id, providerClass(id).defaults)
+  const { ctx } = await attachBrowser({
+    port: portFor(cfg, id, providerIds.indexOf(id)),
+    userDataDir: settings.profileDir,
+    headless: false,
+    clipboardOrigins: [new URL(sel.url).origin],
+  })
+  const pages = ctx.pages()
+  const page = pages[0] ?? (await ctx.newPage())
+  for (const p of pages.slice(1)) await p.close().catch(() => {})
+  if (!page.url().startsWith(new URL(sel.url).origin)) {
+    await page.goto(sel.url, { waitUntil: 'domcontentloaded' }).catch(() => {})
+  }
+  return sessionState(page, sel.auth ?? {})
 }
 
 /** Check the things that actually break, and name them. */
@@ -115,17 +190,22 @@ async function doctor(only) {
       // failure made `doctor` exit non-zero on a perfectly healthy install,
       // which is exactly the kind of false alarm that gets a check ignored.
       console.log('  selectors : not calibrated yet - scaffold only, not advertised')
-      console.log(`              to bring it up: uibridge capture ${id}`)
+      // Session state is still reported, because sign-in comes BEFORE
+      // calibration: the signed-out site is a different application, and
+      // calibrating against it records the wrong selectors.
+      const v = await peekSession(id, sel).catch((e) => ({ state: 'unknown', authority: e.message.split(nlLiteral)[0], because: [] }))
+      printSession(v)
+      console.log(`  next      : ${v.state === 'in' ? `uibridge capture ${id}` : `uibridge login ${id}`}`)
       if (only) bad++
       continue
     }
     let session
     try {
       session = await Session.open(id, { cfg })
-      const signedIn = await session.signedIn()
+      const v = await session.sessionState()
       console.log(`  chrome    : ok (port ${portFor(cfg, id, providerIds.indexOf(id))})`)
-      console.log(`  session   : ${signedIn ? 'signed in' : `SIGNED OUT - run: uibridge login ${id}`}`)
-      if (!signedIn) bad++
+      printSession(v)
+      if (v.state !== 'in') bad++
 
       // The clipboard is a machine-global resource that can fail on its own,
       // and when it does, extraction quietly drops to a lower tier. Better to
@@ -209,7 +289,15 @@ async function ask(id, prompt) {
 try {
   if (cmd === 'serve' || cmd === undefined) await serve(cfg)
   else if (cmd === 'login') await login(requireProviderArg(rest[0]))
-  else if (cmd === 'doctor') await doctor(rest[0])
+  else if (cmd === 'doctor') {
+    // --anon proves the check fires the OTHER way: a signal that has only
+    // ever been seen succeed has not been tested.
+    if (rest.includes('--anon')) {
+      const ok = await checkAnonymousDetection(requireProviderArg(rest.find((a) => !a.startsWith('--'))))
+      process.exit(ok ? 0 : 1)
+    }
+    await doctor(rest[0])
+  }
   else if (cmd === 'ask') await ask(requireProviderArg(rest[0]), rest.slice(1).join(' '))
   else if (cmd === 'capture') await captureExchange(cfg, requireProviderArg(rest[0]), rest.slice(1).join(' '))
   else if (cmd === 'recon') await recon(rest)

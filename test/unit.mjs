@@ -15,6 +15,7 @@ import { Mutex, retry, waitFor, waitStable } from '../src/core/async.mjs'
 import { flattenMessages, readAttachments, readModes } from '../src/api/openai.mjs'
 import { resolveModel, modelCatalogue, providerIds, providerClass } from '../src/providers/registry.mjs'
 import { RequestError, SignedOutError, ContractError } from '../src/core/errors.mjs'
+import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
 
 const NL = String.fromCharCode(10)
 const lines = (...l) => l.join(NL)
@@ -270,4 +271,68 @@ test('errors carry actionable status codes', () => {
   const c = new ContractError('gemini', 'sendButton', 'button.send')
   assert.match(c.message, /sendButton/)
   assert.match(c.message, /button\.send/)
+})
+
+// --- session detection -----------------------------------------------------
+// These pin the failure that motivated the whole module: chatgpt.com answers
+// while SIGNED OUT, from a different app and a weaker model, so a wrong
+// verdict here does not throw - it quietly poisons a batch.
+
+test('session: the session endpoint of the app is authoritative', () => {
+  const v = decideSession({ account: 'someone@example.com', accountField: 'user.email', endpoint: { url: '/api/auth/session', status: 200 } })
+  assert.equal(v.state, 'in')
+  assert.match(v.authority, /session endpoint/)
+})
+
+test('session: a session cookie proves a session', () => {
+  const v = decideSession({ authCookies: ['__Secure-next-auth.session-token'], cookies: [] })
+  assert.equal(v.state, 'in')
+})
+
+test('session: the anonymous bundle is proof of NO session', () => {
+  // Measured on chatgpt.com: the signed-out visitor is served a completely
+  // different application from /unauth-mweb/. That is a fact about the
+  // server's response, not about page wording.
+  const v = decideSession({ anonAsset: '/unauth-mweb/assets/client-DLhqMDEN.js', authCookies: [] })
+  assert.equal(v.state, 'anonymous')
+  assert.match(v.because[0], /ANONYMOUS bundle/)
+})
+
+test('session: the anonymous bundle outranks a weak account marker', () => {
+  // A loose accountMarker selector matching something on the logged-out page
+  // must not be able to claim a session.
+  const v = decideSession({ anonAsset: '/unauth-mweb/x.js', accountMarker: 3, authCookies: [] })
+  assert.equal(v.state, 'anonymous')
+})
+
+test('session: nothing conclusive is UNKNOWN, never signed in', () => {
+  // The bug this replaces: `if (!signedOutMarker) return true`. An unknown
+  // page, a slow page, or a page in an unexpected language all read as
+  // "signed in", and every request then ran against no account.
+  const v = decideSession({ authCookies: [], cookies: [], endpoint: null, accountMarker: 0 })
+  assert.equal(v.state, 'unknown')
+  assert.notEqual(v.state, 'in')
+})
+
+test('session: an endpoint error is not a negative', () => {
+  // A network failure says nothing either way; only an endpoint that ANSWERED
+  // without an account is real evidence of anonymity.
+  const v = decideSession({ endpoint: { url: '/api/auth/session', error: 'Failed to fetch' }, authCookies: [], accountMarker: 0 })
+  assert.equal(v.state, 'unknown')
+})
+
+test('session: a challenge outranks everything', () => {
+  const v = decideSession({ challengeText: 'unusual traffic', account: 'a@b.c', authCookies: ['x'] })
+  assert.equal(v.state, 'challenge')
+})
+
+test('session: the message names the evidence AND the command', () => {
+  const msg = signedOutMessage('chatgpt', decideSession({ anonAsset: '/unauth-mweb/x.js', authCookies: [] }))
+  assert.match(msg, /login chatgpt/)
+  assert.match(msg, /ANONYMOUS bundle/)
+  // The password promise is not decoration: it is the thing a user is right
+  // to worry about when a tool tells them to log in.
+  assert.match(msg, /never sees or types your password/)
+  // And it must say WHY refusing beats proceeding.
+  assert.match(msg, /weaker model/)
 })
