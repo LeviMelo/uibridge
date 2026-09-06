@@ -1,0 +1,5 @@
+**/__pycache__/
+*.pyc
+.codex-tmp/
+testdata/capture/
+testdata/recon/

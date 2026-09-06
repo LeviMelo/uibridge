@@ -37,7 +37,7 @@ const DEFAULT_PROMPT =
   'n, effect size), the DerSimonian-Laird variance estimator in LaTeX, a short ' +
   'Python function, and a downloadable CSV of the table. All four.'
 
-export async function captureExchange(cfg, id, promptArg) {
+export async function captureExchange(cfg, id, promptArg, { continueConversation = false } = {}) {
   const log = logger(`capture:${id}`)
   const Class = providerClass(id)
   const sel = Class.selectors
@@ -100,14 +100,28 @@ export async function captureExchange(cfg, id, promptArg) {
   // --- run one exchange ----------------------------------------------------
   const provider = new Class({ selectors: sel, settings: { ...settings, url: sel.url }, log })
   await provider.open(page)
-  await provider.newConversation(page).catch(() => {})
+  if (!continueConversation) await provider.newConversation(page).catch(() => {})
+  await provider.dismissNotices?.(page).catch(() => [])
   const before = await count(page, sel.responseBlocks)
 
   log.info('sending prompt')
-  await provider.submit(page, prompt)
-
   const ctxState = { turnsBefore: before }
+  await provider.submit(page, prompt, ctxState)
   await provider.awaitCompletion(page, ctxState)
+  // Wire completion does not need a DOM index, but this calibration tool
+  // deliberately records both surfaces. Wait for the corresponding rendered
+  // turn before taking its HTML and screenshot.
+  if (ctxState.index == null) {
+    const total = await waitFor(async () => {
+      const n = await count(page, sel.responseBlocks)
+      return n > before ? n : null
+    }, {
+      timeout: settings.submitAckMs ?? 60000,
+      poll: settings.pollMs,
+      what: 'the captured response turn to render',
+    })
+    ctxState.index = total - 1
+  }
   // Generated files land after the text; give the chip a bounded chance to
   // appear so the capture records it.
   await waitFor(async () => (await count(page, sel.generatedFile?.chip ?? 'nothing')) || null, {

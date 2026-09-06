@@ -90,9 +90,10 @@ export async function readSessionEvidence(page, auth = {}) {
               for (const f of fields ?? []) {
                 const v = json && dig(json, f)
                 if (v) {
-                  // Only an identifier is returned, and only if it looks like
-                  // one: a token would satisfy "truthy" just as well.
-                  account = typeof v === 'string' && v.length < 120 && !/[A-Za-z0-9_-]{60,}/.test(v) ? v : true
+                  // Return presence only. Even an email address is needless
+                  // account data in logs and HTTP errors; authentication
+                  // needs a verdict, not the identifier itself.
+                  account = true
                   field = f
                   break
                 }
@@ -177,7 +178,7 @@ export function decideSession(ev, auth = {}) {
     return {
       state: 'in',
       authority: `the app's own session endpoint (${ev.endpoint?.url})`,
-      because: [`${ev.accountField} = ${typeof ev.account === 'string' ? ev.account : 'present'}`],
+      because: [`${ev.accountField} is present`],
     }
   }
 
@@ -201,14 +202,6 @@ export function decideSession(ev, auth = {}) {
     return { state: 'anonymous', authority: "the app's own session endpoint", because }
   }
 
-  if (ev.accountMarker > 0) {
-    return {
-      state: 'in',
-      authority: 'an account control is present in the page (weak evidence)',
-      because: [`${ev.accountMarker} match(es) for the account marker`],
-    }
-  }
-
   if (ev.signedOutText) {
     return {
       state: 'anonymous',
@@ -221,7 +214,10 @@ export function decideSession(ev, auth = {}) {
     state: 'unknown',
     authority: 'nothing conclusive was found',
     because: [
-      'no session cookie matched, no session endpoint answered, and no account control was found',
+      'no session cookie matched and no authenticated session endpoint answered',
+      ...(ev.accountMarker > 0
+        ? [`${ev.accountMarker} account-like DOM control(s) were ignored because DOM is not proof of a session`]
+        : []),
       'treated as SIGNED OUT: proceeding would risk running against an anonymous session',
     ],
   }
@@ -242,7 +238,7 @@ export async function sessionState(page, auth = {}) {
  * I type. The password promise is stated every time because it is the thing
  * a user is right to worry about when a tool asks them to log in.
  */
-export function signedOutMessage(providerId, verdict, { command = `node bin/uibridge.mjs login ${providerId}` } = {}) {
+export function signedOutMessage(providerId, verdict, { command = `uibridge login ${providerId}` } = {}) {
   const lines = [
     `${providerId}: not signed in, so this request was not sent.`,
     '',

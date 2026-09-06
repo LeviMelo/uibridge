@@ -7,6 +7,85 @@ rules that are not up for renegotiation.
 Read this before touching code. Most of the expensive mistakes in this
 repo's history were made by assuming something that was cheap to measure.
 
+## CURRENT HANDOFF — 2026-09-06 19:16 America/Sao_Paulo
+
+The user requested a full-history/virtualization test and asked that the next
+agent continue it. **Do not claim thread export is finished yet.** The tree is
+syntactically valid and all 68 unit tests pass, but the new export path has
+not passed live acceptance because ChatGPT temporarily stopped serving prior
+conversation history after the test traffic.
+
+### What was measured in this final session
+
+- Reused native ChatGPT thread:
+  `6a9ddcb5-37f8-83e9-90a2-69c6b9d5833f`.
+- Initial thread load exposed 6 stable DOM nodes (3 user, 3 assistant), each
+  with `data-message-id`; assistant nodes also had
+  `data-message-model-slug`.
+- The current ChatGPT frontend does **not** return history from the old
+  guessed `GET /backend-api/conversation/<id>` route. Loading the native URL
+  sends `POST /backend-api/f/conversation/prepare`; its request carries
+  `conversation_id`, `parent_message_id`, model/client state, and its response
+  is only `{status, conduit_token}` (385 bytes). The subsequent history is
+  delivered through the app's conduit/runtime and materializes in the DOM.
+  `/backend-api/conversation/<id>/textdocs` returned an empty array. Do not
+  invent a direct JSON-history endpoint without measuring it.
+- Five additional same-thread turns completed before traffic was stopped:
+  `LONG_01` read the attached format-agnostic fixture and returned
+  `FORMAT_AGNOSTIC_260906`; the next turn generated and uibridge downloaded
+  `long_thread_artifact.txt`; `LONG_03`, `LONG_04`, and `LONG_05` were exact.
+- Repeated one-shot CLI calls were observed to open/close a temporary tab.
+  The user correctly rejected that for ongoing conversation use.
+- A subsequent persistent `uibridge chat --jsonl` attempt made no chatbot
+  turn: it timed out after 60 seconds waiting for existing history. This is
+  consistent with the already-measured ChatGPT data-protection lock that
+  temporarily blocks previous conversations. Live traffic was stopped rather
+  than retrying or creating more chats. Wait for the lock to clear.
+
+### Code added immediately before handoff
+
+- `uibridge chat <provider> [--thread=<native-id>] [--model=...] [--jsonl]`
+  keeps one `Session`, one pooled browser tab, and updates/reuses the native
+  thread ID. On a retained tab, `Session.ask` now skips `resumeThread` when it
+  is already at the requested UUID, avoiding reload/history rehydration.
+- Fresh-thread pacing and continuation pacing are separate:
+  `minIntervalMs` remains conservative; `continuationIntervalMs` defaults to
+  zero because the observed lock was caused by creating/accessing many chats,
+  not ordinary turns within one thread.
+- `uibridge export <provider> <native-id> [--output=...] [--json]` is wired to
+  `Session.exportThread`. The current DOM exporter sweeps bottom→top and
+  top→bottom, deduplicates stable message IDs, records roles/text/model/link/
+  media/file-control metadata, and emits boundary/completeness evidence.
+- Important architecture cleanup for the next agent: the exporter currently
+  lives in `DomProvider` but uses ChatGPT-specific
+  `[data-message-author-role][data-message-id]`. Move it into
+  `ChatGPTProvider` or make the message selector/identity fields an explicit
+  provider selector contract before calling it provider-generic. Gemini has
+  not been calibrated for full-thread export and must not be advertised as
+  supporting it yet.
+
+### Exact next steps
+
+1. Let ChatGPT's previous-conversation lock clear. Do not create a new chat.
+2. Run `uibridge export chatgpt
+   6a9ddcb5-37f8-83e9-90a2-69c6b9d5833f --json` once. Verify at least the
+   16 known messages (8 pairs: original 3 plus 5 successful additions), exact
+   order, unique IDs, the uploaded fixture reference, sandbox/generated-file
+   reference, and `complete:true` with both boundaries reached.
+3. Move/calibrate the exporter contract as noted above, add pure tests for
+   deduplication/order/completeness, and make an inaccessible-history state a
+   typed `thread_history_unavailable` error that reports any matched notice.
+4. Continue growth through **one** persistent `uibridge chat` process only.
+   Use unique markers, then export again after enough turns to force actual
+   virtualization. Compare the ID set before/after and against the number of
+   successful ledger events. Do not use one-shot loops.
+5. Add the export route to the HTTP API only after CLI live acceptance. Update
+   README/package version/tests, remove any scratch probe, and rerun package
+   dry-run.
+
+Scratch `_measure-thread.mjs` was measurement-only and has been removed. The
+durable local ledger and downloads are gitignored.
+
 ---
 
 ## 1. What this is, and the goal behind it
@@ -156,7 +235,7 @@ src/tools/
   capture.mjs       record one exchange for calibration
 
 bin/uibridge.mjs    CLI: serve, login, doctor, ask, recon, capture
-test/unit.mjs       60 tests, no browser, ~1s
+  test/unit.mjs       67 tests, no browser, ~2s
 test/live.py        live UI-surface suite (needs a signed-in profile)
 examples/_client.py the client a pipeline copies
 ```
@@ -188,7 +267,7 @@ examples/_client.py the client a pipeline copies
 |---|---|---|
 | Send prompt, get answer | works | works |
 | Extraction | DOM: copy button, then rebuilt markdown, then innerText | **wire**: the response the page receives |
-| Attachments (PDF/CSV) | works (trusted CDP drag) | works (hidden file input, upload confirmed on the wire) |
+| File attachments | works (trusted CDP drag) | works (hidden unrestricted file input, each upload confirmed on the wire) |
 | Model selection | works, flaky on Gemini's side, retried and reported | works (family x effort), confirmed by the server's slug |
 | Generated files | works (viewer overlay -> Download control) | works (sandbox link -> page fetch -> keep the bytes) |
 | Citations | works (`...` -> View sources) | works, with character offsets into the answer |
@@ -294,8 +373,9 @@ Two things were verified so nobody has to retry the shortcuts:
   return `401 {"detail":{"message":"Unauthorized - Access token is
   missing"}}`. The app adds an Authorization bearer header in its own JS.
 
-Scope: code-interpreter (`/mnt/data`) files. Canvas "textdocs" and generated
-images are different endpoints, not yet retrieved.
+Scope: format-agnostic files sent through the composer and downloadable files
+returned by a thread. Canvas "textdocs" are UI documents rather than files
+and remain outside the contract; no extension/MIME allowlist is used.
 
 ### 5.5 Session detection (`core/auth.mjs`)
 
@@ -425,7 +505,8 @@ never retried automatically.
 ## 6. Public API
 
 `POST /v1/chat/completions` (OpenAI envelope; `attachments: [paths]`,
-`modes: {thinking: bool}`), `GET /v1/models`, `GET /v1/capabilities`.
+`modes: {thinking: bool}`, optional `thread_id`), `GET /v1/models`,
+`GET /v1/capabilities`.
 
 Everything specific is under `_uibridge`:
 
@@ -438,6 +519,8 @@ Everything specific is under `_uibridge`:
 | `markdown`, `lossy_math` | whether the text is markdown; whether maths lost its source |
 | `tables`, `code_blocks`, `json` | parsed from that markdown |
 | `files` | generated files on disk (`{name, path, bytes, mime}`), or `{name, error}` when retrieval failed - never silently short |
+| `ledger` | local per-native-thread JSONL record of input/output paths, sizes and SHA-256 hashes; no prompt/answer text or credentials |
+| `thread_id` | provider-native UUID from the thread URL; pass it to a later request to continue that exact thread |
 | `browsed`, `searched`, `sources`, `citations` | searched = attempted; browsed = the answer carries citations; citations carry `at`, the offset in the content |
 | `provider_error` | the text is the provider's own error notice |
 | `truncated` | the stream ended before the site said it was done |
@@ -478,9 +561,14 @@ Reuse the first tab, close the rest, and clean up in a `finally`.
 ```bash
 npm install
 node bin/uibridge.mjs login chatgpt        # sign in by hand, once
+uibridge logout chatgpt                    # clear the dedicated session
+uibridge status --json                     # scriptable auth state for every provider
+uibridge models --json                     # advertised model ids
+uibridge threads [provider] --json          # recorded provider-native threads
+uibridge thread <provider> <id> --json      # per-turn sent/downloaded file ledger
 node bin/uibridge.mjs doctor               # chrome, session, models, contracts
 node bin/uibridge.mjs doctor chatgpt --anon  # prove signed-out detection
-npm test                                   # 60 unit tests, no browser, ~1s
+npm test                                   # 68 unit tests, no browser, ~2s
 python test/live.py                        # live suite (signed-in profile)
 
 node bin/uibridge.mjs ask chatgpt "..." --file=paper.pdf --model=chatgpt-5.6-high
@@ -509,47 +597,55 @@ editing tools and verify with a byte-level check afterwards.
 
 ---
 
-## 9. What remains
+## 9. Scope boundaries and operational notes
 
-### Verified-but-thin (one live request each closes these)
+### Live verification completed 2026-09-06
 
-1. **The GPT-5.5 family switch** after the two-panel fix. The panel bug was
-   found and fixed; the switch itself has not been watched to succeed.
-2. **Medium vs high effort** distinguished by `thinking_effort`. The logic is
-   written and unit-tested; the live read-back was interrupted by the lock.
+1. **The GPT-5.5 family switch** succeeded: `chatgpt-5.5-medium` was sent as
+   `gpt-5-5-thinking` with `thinking_effort=standard`, and the server reported
+   that model as the answerer.
+2. **Medium vs high effort** is distinguished live: `chatgpt-5.6-high` was
+   sent as `gpt-5-6-thinking` with `thinking_effort=extended`; medium was
+   observed with `standard`.
 
-### Not built
+### Deliberately out of scope or externally blocked
 
-3. **Canvas documents ("textdocs") and generated images.** Different
-   endpoints (`/backend-api/conversation/<id>/textdocs` was seen in traffic).
-   Same pattern applies: find the trigger, let the page fetch, keep the bytes.
-4. **Streaming responses.** `decodeDeltaStream` was written to work on a
-   partial body precisely so this needs no second implementation: the tap
-   already exposes `partial()`. Wiring it to a streaming HTTP response is
-   open work.
-5. **Gemini wire transport.** Currently impossible (5.9). Re-check
-   occasionally; if their generation ever surfaces in page traffic, the
-   transport seam is already there.
-6. **A Gemini `notices` block.** The mechanism is generic and Gemini has its
-   own dialogs; nothing has been measured yet.
+3. **Canvas/textdocs are out of scope.** The user confirmed that ChatGPT
+   Canvas is not part of this bridge's purpose. The supported artifact path
+   is format-agnostic files exchanged through a chat thread. UI-native
+   documents and canvases are not files and are not part of the contract.
+4. **Streaming responses are built.** With `stream: true`, ChatGPT's partial
+   wire body is decoded into OpenAI-compatible SSE content chunks. DOM-only
+   providers emit their extracted answer as one content chunk. The final
+   chunk carries `_uibridge` provenance and is followed by `[DONE]`.
+5. **Gemini wire transport is not a missing product feature.** Repeated live
+   measurement found no generation payload in page-level traffic (5.9), so
+   Gemini correctly uses its copy/DOM extraction ladder. If the site later
+   exposes a readable payload, the transport seam can adopt it.
+6. **Provider notices remain measurement-driven.** The generic notice and
+   click-through mechanism is built. ChatGPT's observed rate-limit dialog is
+   calibrated. No Gemini dialog was visible during the final authenticated
+   inspection, so no speculative selector was added.
 
-### Known rough edges
+### Operational design
 
-7. **Latency.** A 5-second answer takes ~45-60 s end to end. The cost is a
-   fresh conversation per request (a full app load) plus, on Gemini, DOM
-   polling. Reusing a conversation would break request isolation and model
-   switching, so the fix is probably a warm pool of pre-opened new-chat tabs.
-8. **`newChatPerRequest` is load.** Each request loads the app. That is
-   part of what tripped the lock; the warm-pool idea above would also reduce
-   it.
+7. **Conversation isolation is the default, continuation is explicit.** Omit
+   `thread_id` for a new isolated provider thread, or pass the provider-native
+   UUID to continue it. Long-thread history is allowed to hydrate and settle
+   before a response baseline is taken; changed assistant blocks are tracked
+   directly instead of relying on DOM counts that virtualization invalidates.
+8. **Both calibration and production can reuse a thread.** `uibridge capture
+   <provider> --continue "follow-up"` minimizes investigative traffic;
+   `uibridge ask <provider> --thread=<native-id>` and top-level API
+   `thread_id` provide explicit production continuation.
 9. **Retry policy is deliberately narrow**: only `compose_failed` and
    `submit_failed`, once. Timeouts are not retried (the model was working,
    and repeating a ten-minute wait costs the caller more than it recovers).
    Provider errors are not retried (caller's policy).
-10. **`authCookiePattern` for ChatGPT is still a guess** and has never been
-    observed to fire. It is a positive-only signal, so being wrong costs
-    nothing - the verdict falls through to the session endpoint. Confirm it
-    when convenient.
+10. **Authentication paths are intentionally not automated.** Login waits for
+    the authoritative end state, so password, passkey, Windows Hello, MFA and
+    account-choice flows can vary without becoming bridge logic. ChatGPT is
+    proven by `/api/auth/session`; Gemini by its observed SID-family cookies.
 
 ### Deferred by the user
 
@@ -565,8 +661,12 @@ selection, markdown with tables and citations, and generated files on disk.
 ChatGPT's answers, model provenance and citations come off the network;
 Gemini's come from its own copy control with two fallbacks below it.
 
-The two unverified items in 9.1 and 9.2 are the only claims in this document
-that were not watched succeeding on the live site. Everything else in
-section 5 was measured, and where it contradicts something a comment or
-commit message once said, the comment has been corrected rather than quietly
-dropped.
+The GPT-5.5 family switch and high/medium effort distinction were watched
+succeeding live on 2026-09-06. Everything claimed in section 5 was measured;
+where a measurement contradicts an earlier comment or commit message, the
+comment is corrected rather than quietly retained.
+
+Signed-out HTTP acceptance was also measured on 2026-09-06 after clearing
+both dedicated profiles: `gemini-flash` returned `401 signed_out` in 985 ms;
+`chatgpt-5.6-instant` returned `401 signed_out` in 3.9 s, with the anonymous
+bundle named as evidence. Neither prompt reached a chatbot.

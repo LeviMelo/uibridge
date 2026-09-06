@@ -307,9 +307,17 @@ class Capture {
   }
 
   /** The response is complete: the connection closed or failed. */
-  finished(timeout = 600000) {
+  finished(timeout = 600000, onProgress = null) {
     return this.#until(
-      () => (this.#records[0]?.done ? snapshot(this.#records[0]) : null),
+      () => {
+        const rec = this.#records[0]
+        if (!rec) return null
+        // The same retained bytes used for the final answer are also safe to
+        // inspect while the connection is open. The decoder deliberately
+        // accepts an incomplete final SSE frame.
+        if (onProgress) onProgress(snapshot(rec))
+        return rec.done ? snapshot(rec) : null
+      },
       timeout,
       `the ${this.#pattern} response to finish`
     )

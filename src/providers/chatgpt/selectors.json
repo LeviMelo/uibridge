@@ -54,6 +54,10 @@
     "[data-message-author-role] node; the copy control is 'Copiar mensagem'."
   ],
   "newChatButton": "a[data-testid='create-new-chat-button']",
+  "thread": {
+    "urlPattern": "/c/([^/?#]+)",
+    "urlTemplate": "/c/{id}"
+  },
   "models": {
     "chatgpt-5.6-instant": {
       "family": "GPT-5[.]6",
@@ -154,8 +158,9 @@
     "  cookies seen      oai-did, oai-mweb-origin, oai-sc, g_state - device",
     "                    and telemetry ids, no session token.",
     "VERIFIED 2026-09-06 in BOTH directions:",
-    "  signed in    /api/auth/session returned user.email - so the endpoint",
-    "               is the authority here and the cookie pattern never has to",
+    "  signed in    /api/auth/session reported a configured account field;",
+    "               only boolean presence leaves the page. The endpoint is",
+    "               authoritative and the cookie pattern never has to",
     "               fire. NOTE its response also carries a bearer token and",
     "               says so itself, which is why core/auth.mjs does the field",
     "               lookup inside the page and keeps none of the payload.",
@@ -236,8 +241,9 @@
     "    closes, so success is judged by the page actually issuing the request,",
     "    and the click is repeated until it does.",
     "VERIFIED: 74 bytes of real CSV on disk with the right header and rows.",
-    "SCOPE: code-interpreter (/mnt/data) files. Canvas 'textdocs' and generated",
-    "images are different endpoints and are not retrieved yet."
+    "SCOPE: downloadable files linked through the code-interpreter /mnt/data",
+    "path, regardless of extension or MIME type. UI-native Canvas/textdoc",
+    "objects are deliberately outside the file-transfer contract."
   ],
   "notices": [
     {

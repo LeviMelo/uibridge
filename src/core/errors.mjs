@@ -42,7 +42,7 @@ export class SignedOutError extends BridgeError {
       code: 'signed_out',
     })
     this.provider = provider
-    this.action = `node bin/uibridge.mjs login ${provider}`
+    this.action = `uibridge login ${provider}`
   }
 
   toJSON() {

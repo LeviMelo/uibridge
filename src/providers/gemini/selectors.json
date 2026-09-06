@@ -34,6 +34,10 @@
     "['Good response','Bad response','Copy','Show more options']."
   ],
   "newChatButton": "button[aria-label*='New chat' i], button[aria-label*='Nova conversa' i], a[aria-label*='New chat' i]",
+  "thread": {
+    "urlPattern": "/app/([^/?#]+)",
+    "urlTemplate": "/app/{id}"
+  },
   "modelPicker": "button[aria-label*='mode picker' i], button[aria-label*='seletor de modo' i], button[aria-label*='mode selector' i], button[aria-label*='model' i]",
   "modelOption": "[role='menuitem']",
   "_modelPicker": [

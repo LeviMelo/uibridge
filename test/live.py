@@ -300,7 +300,7 @@ def t_unknown_model_falls_back():
                           "messages": [{"role": "user",
                                         "content": "Define publication bias."}]},
                          timeout=600)
-    check("unknown model falls back, no crash", status == 200, f"HTTP {status}")
+    check("unknown model is rejected", status == 400, f"HTTP {status}")
 
 
 def t_models_endpoint():

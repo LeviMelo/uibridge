@@ -13,10 +13,13 @@ import { Session } from '../session.mjs'
 import { modelCatalogue, providerIds, resolveModel } from '../providers/registry.mjs'
 import {
   completionResponse,
+  completionChunk,
+  contentDelta,
   flattenMessages,
   modelsResponse,
   readAttachments,
   readModes,
+  readThreadId,
 } from './openai.mjs'
 
 const log = logger('api')
@@ -91,14 +94,90 @@ export function createApp(cfg = loadConfig()) {
       const prompt = flattenMessages(body.messages)
       const files = readAttachments(body)
       const modes = readModes(body)
+      const threadId = readThreadId(body)
       const requested = body.model ?? cfg.defaultProvider
       const { provider, model, matched } = resolveModel(requested, cfg.defaultProvider)
-      if (!matched) log.warn(`unknown model "${requested}" - using ${provider} as-is`)
+      if (!matched) {
+        throw new RequestError(
+          `Unknown model "${requested}". Available: ${modelCatalogue().map((m) => m.id).join(', ')}`
+        )
+      }
 
       const session = await sessionFor(provider)
-      const result = await session.ask({ prompt, files, model, modes })
+      const result = await session.ask({ prompt, files, model, modes, threadId })
       return completionResponse({ modelId: requested, result, provider })
     },
+  }
+
+  async function streamCompletion(body, res) {
+    const prompt = flattenMessages(body.messages)
+    const files = readAttachments(body)
+    const modes = readModes(body)
+    const threadId = readThreadId(body)
+    const requested = body.model ?? cfg.defaultProvider
+    const { provider, model, matched } = resolveModel(requested, cfg.defaultProvider)
+    if (!matched) {
+      throw new RequestError(
+        `Unknown model "${requested}". Available: ${modelCatalogue().map((m) => m.id).join(', ')}`
+      )
+    }
+
+    const session = await sessionFor(provider)
+    let opened = false
+    let sent = ''
+    let streamId = null
+    const write = (value) => {
+      if (!opened) {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        })
+        opened = true
+      }
+      res.write(`data: ${JSON.stringify(value)}\n\n`)
+    }
+    const progress = (text) => {
+      const update = contentDelta(sent, text)
+      if (update.rewritten) {
+        throw new BridgeError(
+          'The provider rewrote text that was already emitted. The partial stream was stopped rather than returning corrupted content.',
+          { status: 502, code: 'non_monotonic_stream', retryable: true }
+        )
+      }
+      const delta = update.delta
+      sent = update.next
+      if (!delta) return
+      if (!streamId) {
+        streamId = `chatcmpl-stream-${Date.now().toString(36)}`
+        write(completionChunk({ id: streamId, modelId: requested, delta: { role: 'assistant' } }))
+      }
+      write(completionChunk({ id: streamId, modelId: requested, delta: { content: delta } }))
+    }
+
+    try {
+      const result = await session.ask({ prompt, files, model, modes, onProgress: progress, threadId })
+      const full = completionResponse({ modelId: requested, result, provider })
+      if (!streamId) {
+        streamId = full.id
+        write(completionChunk({ id: streamId, modelId: requested, delta: { role: 'assistant' } }))
+      }
+      if (sent !== result.text) progress(result.text)
+      write(completionChunk({
+        id: streamId,
+        modelId: requested,
+        finishReason: result.truncated ? 'length' : 'stop',
+        bridge: full._uibridge,
+      }))
+      res.end('data: [DONE]\n\n')
+    } catch (err) {
+      if (!opened) throw err
+      const payload = err instanceof BridgeError
+        ? err.toJSON()
+        : { error: { message: err.message, type: 'internal' } }
+      res.write(`data: ${JSON.stringify(payload)}\n\n`)
+      res.end('data: [DONE]\n\n')
+    }
   }
 
   const server = createServer(async (req, res) => {
@@ -108,6 +187,10 @@ export function createApp(cfg = loadConfig()) {
 
     try {
       const body = req.method === 'POST' ? await readBody(req) : {}
+      if (`${req.method} ${path}` === 'POST /v1/chat/completions' && body.stream === true) {
+        await streamCompletion(body, res)
+        return
+      }
       send(res, 200, await route(body))
     } catch (err) {
       // Typed errors carry their own status, so a caller can tell "log in"

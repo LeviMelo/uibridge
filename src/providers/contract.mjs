@@ -67,6 +67,11 @@ export class Provider {
 
   // --- lifecycle -----------------------------------------------------------
 
+  /** Navigate far enough to inspect authentication; must not require signed-in UI. */
+  async prepareAuth(_page) {
+    this.#todo('prepareAuth')
+  }
+
   /** Navigate to a usable, signed-in composer. Throws SignedOutError. */
   async open(_page) {
     this.#todo('open')
@@ -80,6 +85,30 @@ export class Provider {
   /** Start a fresh conversation, so requests never share context. */
   async newConversation(_page) {
     this.#todo('newConversation')
+  }
+
+  async resumeThread(_page, _url) {
+    this.#todo('resumeThread')
+  }
+
+  async currentThread(_page, _ctx) {
+    return null
+  }
+
+  async threadIds(_page) {
+    return []
+  }
+
+  async lastResponseText(_page) {
+    return null
+  }
+
+  async responseTexts(_page) {
+    return []
+  }
+
+  async exportThread(_page, _threadId) {
+    this.#todo('exportThread')
   }
 
   // --- controls ------------------------------------------------------------

@@ -8,6 +8,7 @@ __pycache__/
 
 # Run artefacts, not source.
 downloads/
+.uibridge/
 *.log
 
 # Captured DOM/network dumps from probes: large, machine-specific, and they

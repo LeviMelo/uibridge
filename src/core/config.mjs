@@ -21,6 +21,8 @@ const DEFAULTS = {
   host: '127.0.0.1',
   profileDir: '.profiles',
   downloadDir: 'downloads',
+  ledgerDir: '.uibridge/threads',
+  exportDir: '.uibridge/exports',
   headless: false,
   defaultProvider: 'gemini',
   // One debugging port per provider, derived from this base, so restarts
@@ -57,6 +59,10 @@ const DEFAULTS = {
     // and a batch pipeline is exactly the caller that would burst. Per
     // provider below; 0 disables.
     minIntervalMs: 0,
+    // Continuations do not create sidebar conversations and therefore do
+    // not trigger the fresh-chat burst condition. Set independently when a
+    // provider/account needs slower same-thread traffic.
+    continuationIntervalMs: 0,
   },
 }
 
@@ -83,6 +89,7 @@ export function providerSettings(cfg, id, providerDefaults = {}) {
   const s = merge(merge(cfg.provider, providerDefaults), cfg.providers[id] ?? {})
   s.downloadDir = resolve(ROOT, s.downloadDir ?? cfg.downloadDir)
   s.profileDir = resolve(ROOT, cfg.profileDir, id)
+  s.ledgerDir = resolve(ROOT, cfg.ledgerDir)
   return s
 }
 

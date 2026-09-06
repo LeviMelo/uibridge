@@ -42,7 +42,8 @@ export function modelCatalogue() {
 export function resolveModel(requested, fallbackProvider) {
   const hit = modelCatalogue().find((m) => m.id === requested)
   if (hit) return { provider: hit.provider, model: hit.model, matched: true }
-  // Unknown ids fall back rather than failing: an OpenAI-shaped client often
-  // sends "gpt-4" or similar, and refusing that is unhelpful.
+  // Resolution remains pure; the HTTP boundary rejects matched:false. A
+  // silent fallback would run a systematic-review row on an unintended
+  // provider/model, which provenance can report but cannot undo.
   return { provider: fallbackProvider, model: null, matched: false }
 }

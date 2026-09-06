@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseTables, parseCodeBlocks, extractJSON, parseMath } from '../src/core/markdown.mjs'
 import { Mutex, retry, waitFor, waitStable } from '../src/core/async.mjs'
-import { flattenMessages, readAttachments, readModes } from '../src/api/openai.mjs'
+import { completionChunk, completionResponse, contentDelta, flattenMessages, readAttachments, readModes, readThreadId } from '../src/api/openai.mjs'
 import { resolveModel, modelCatalogue, providerIds, providerClass } from '../src/providers/registry.mjs'
 import { RequestError, SignedOutError, ContractError } from '../src/core/errors.mjs'
 import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
@@ -20,12 +20,36 @@ import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse
 import { WireTap } from '../src/transports/wire.mjs'
 import { Pacer } from '../src/core/async.mjs'
 import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createApp } from '../src/api/server.mjs'
+import { listThreads, readThreadEvents, recordThreadEvent } from '../src/core/ledger.mjs'
 
 const NL = String.fromCharCode(10)
 const lines = (...l) => l.join(NL)
+
+test('thread ledger records file identities without prompt or answer content', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'uibridge-ledger-'))
+  try {
+    const input = join(dir, 'anything.bin')
+    const output = join(dir, 'answer.any')
+    writeFileSync(input, Buffer.from([0, 1, 2, 255]))
+    writeFileSync(output, 'downloaded')
+    await recordThreadEvent(join(dir, 'ledger'), {
+      at: '2026-09-06T00:00:00.000Z', request_id: 'r1', provider: 'gemini', thread_id: 'native_123',
+      inputs: [input], outputs: [{ name: 'answer.any', path: output, mime: 'application/octet-stream' }],
+      result: { characters: 99, sha256: 'answer-hash' },
+    })
+    const record = readThreadEvents(join(dir, 'ledger'), 'gemini', 'native_123')
+    assert.equal(record.events[0].inputs[0].bytes, 4)
+    assert.equal(record.events[0].outputs[0].bytes, 10)
+    assert.match(record.events[0].inputs[0].sha256, /^[a-f0-9]{64}$/)
+    assert.equal(JSON.stringify(record).includes('prompt text'), false)
+    const listed = await listThreads(join(dir, 'ledger'), 'gemini')
+    assert.deepEqual(listed.map((x) => [x.thread_id, x.turns]), [['native_123', 1]])
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
 
 test('parseTables: header and rows', () => {
   const [t] = parseTables(
@@ -240,6 +264,35 @@ test('readAttachments / readModes validate shape', () => {
   assert.throws(() => readModes({ modes: [] }), RequestError)
 })
 
+test('thread ids use the provider-native UUID/string', () => {
+  const id = '6a9ddcb5-37f8-83e9-90a2-69c6b9d5833f'
+  assert.equal(readThreadId({ thread_id: id }), id)
+  assert.equal(readThreadId({ _uibridge: { thread_id: id } }), id)
+  assert.throws(() => readThreadId({ thread_id: 42 }), RequestError)
+})
+
+test('stream chunks use the OpenAI envelope and carry final bridge metadata', () => {
+  const chunk = completionChunk({
+    id: 'chatcmpl-1',
+    modelId: 'chatgpt-5.6-high',
+    finishReason: 'stop',
+    bridge: { extraction: 'wire' },
+  })
+  assert.equal(chunk.object, 'chat.completion.chunk')
+  assert.equal(chunk.choices[0].finish_reason, 'stop')
+  assert.deepEqual(chunk.choices[0].delta, {})
+  assert.deepEqual(chunk._uibridge, { extraction: 'wire' })
+})
+
+test('stream content deltas append exactly and reject an upstream rewrite', () => {
+  assert.deepEqual(contentDelta('hello', 'hello world'), {
+    delta: ' world', next: 'hello world', rewritten: false,
+  })
+  assert.deepEqual(contentDelta('hello', 'hullo'), {
+    delta: '', next: 'hello', rewritten: true,
+  })
+})
+
 test('registry: only calibrated providers are advertised', () => {
   // /v1/models is a promise that an id works. A provider still on
   // placeholder selectors must not appear: a caller would pick it, get a
@@ -260,12 +313,39 @@ test('resolveModel: known id maps to its provider', () => {
   })
 })
 
-test('resolveModel: unknown id falls back instead of failing', () => {
-  // OpenAI-shaped clients send "gpt-4" whether or not we have it; refusing
-  // is unhelpful, but the caller must be able to see it was not matched.
+test('resolveModel: unknown id is marked unmatched for the HTTP boundary to reject', () => {
   const r = resolveModel('gpt-4-turbo', 'gemini')
   assert.equal(r.matched, false)
   assert.equal(r.provider, 'gemini')
+})
+
+test('completion finish reason reports a truncated upstream answer', () => {
+  const result = {
+    request_id: 'r1', text: 'partial', truncated: true, provenance: {},
+    markdown: true, tables: [], code_blocks: [], files: [], browsed: false, sources: [],
+  }
+  const response = completionResponse({ modelId: 'chatgpt', result, provider: 'chatgpt' })
+  assert.equal(response.choices[0].finish_reason, 'length')
+})
+
+test('HTTP API rejects an unknown model before opening a browser session', async () => {
+  const app = createApp({
+    host: '127.0.0.1', port: 0, defaultProvider: 'gemini',
+    provider: {}, providers: {}, profileDir: '.profiles', downloadDir: 'downloads', basePort: 9333,
+  })
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve))
+  try {
+    const { port } = app.server.address()
+    const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'not-a-real-model', messages: [{ role: 'user', content: 'hello' }] }),
+    })
+    assert.equal(response.status, 400)
+    assert.equal((await response.json()).error.type, 'invalid_request')
+  } finally {
+    await app.close()
+  }
 })
 
 test('errors carry actionable status codes', () => {
@@ -310,6 +390,12 @@ test('session: the anonymous bundle outranks a weak account marker', () => {
   // must not be able to claim a session.
   const v = decideSession({ anonAsset: '/unauth-mweb/x.js', accountMarker: 3, authCookies: [] })
   assert.equal(v.state, 'anonymous')
+})
+
+test('session: an account-looking DOM control alone never proves authentication', () => {
+  const v = decideSession({ accountMarker: 1 })
+  assert.equal(v.state, 'unknown')
+  assert.match(v.because.join(' '), /ignored because DOM is not proof/)
 })
 
 test('session: nothing conclusive is UNKNOWN, never signed in', () => {
@@ -549,6 +635,21 @@ test('wire tap: subscribes to the stream at responseReceived, not later', async 
   const call = cdp.sent.find((s) => s.method === 'Network.streamResourceContent')
   assert.ok(call, 'streamResourceContent must be requested')
   assert.equal(call.params.requestId, '7')
+})
+
+test('wire tap: finished reports bytes that arrived before the stream closed', async () => {
+  const cdp = fakeCDP()
+  const tap = await WireTap.fromClient(cdp)
+  const cap = tap.expect(/answer/)
+  cdp.emit('Network.requestWillBeSent', { requestId: '8', request: { url: 'https://x/answer', method: 'POST' } })
+  cdp.emit('Network.responseReceived', { requestId: '8', response: { status: 200, mimeType: 'text/event-stream' } })
+  await new Promise((r) => setImmediate(r))
+  cdp.emit('Network.dataReceived', { requestId: '8', data: b64('data: partial\n\n') })
+  const seen = []
+  const done = cap.finished(1000, (partial) => seen.push(partial.body))
+  cdp.emit('Network.loadingFinished', { requestId: '8' })
+  await done
+  assert.ok(seen.includes('data: partial\n\n'))
 })
 
 test('wire tap: a multibyte character split across chunks survives', async () => {

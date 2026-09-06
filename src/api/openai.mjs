@@ -50,6 +50,12 @@ export function readModes(body) {
   return Object.fromEntries(Object.entries(modes).map(([k, v]) => [k, !!v]))
 }
 
+export function readThreadId(body) {
+  const value = body.thread_id ?? body._uibridge?.thread_id ?? null
+  if (value !== null && typeof value !== 'string') throw new RequestError('thread_id must be a string')
+  return value
+}
+
 /**
  * Build the response.
  *
@@ -65,7 +71,11 @@ export function completionResponse({ modelId, result, provider }) {
     created: Math.floor(Date.now() / 1000),
     model: modelId,
     choices: [
-      { index: 0, message: { role: 'assistant', content: result.text }, finish_reason: 'stop' },
+      {
+        index: 0,
+        message: { role: 'assistant', content: result.text },
+        finish_reason: result.truncated ? 'length' : 'stop',
+      },
     ],
     // Token counts are not observable through a UI. Present and zero so
     // clients that read usage do not crash; never invented.
@@ -73,6 +83,8 @@ export function completionResponse({ modelId, result, provider }) {
     _uibridge: {
       provider,
       request_id: result.request_id,
+      thread_id: result.thread_id,
+      ledger: result.ledger ?? null,
       elapsed_ms: result.elapsed_ms,
       // PROVENANCE: what the UI was actually on, read back from its own
       // controls after model and modes were applied. Requested is not
@@ -132,4 +144,27 @@ export function modelsResponse(catalogue) {
       owned_by: m.provider,
     })),
   }
+}
+
+/** OpenAI-compatible SSE chunks. Metadata is attached to the final chunk. */
+export function completionChunk({ id, modelId, delta = {}, finishReason = null, bridge = undefined }) {
+  const chunk = {
+    id,
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model: modelId,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+  }
+  if (bridge !== undefined) chunk._uibridge = bridge
+  return chunk
+}
+
+/**
+ * Turn a cumulative text snapshot into an append-only SSE delta.
+ * OpenAI content chunks have no replace operation, so a rewrite must be
+ * surfaced instead of emitting bytes that reconstruct a false answer.
+ */
+export function contentDelta(previous, current) {
+  if (!current.startsWith(previous)) return { delta: '', next: previous, rewritten: true }
+  return { delta: current.slice(previous.length), next: current, rewritten: false }
 }

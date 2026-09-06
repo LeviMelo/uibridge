@@ -66,11 +66,16 @@ export class DomProvider extends Provider {
 
   // --- lifecycle -----------------------------------------------------------
 
-  async open(page) {
-    const { url, readyTimeoutMs } = this.settings
-    if (page.url() === 'about:blank' || !page.url().startsWith(url.split('?')[0])) {
+  async prepareAuth(page) {
+    const { url } = this.settings
+    if (page.url() === 'about:blank' || !page.url().startsWith(new URL(url).origin)) {
       await page.goto(url, { waitUntil: 'domcontentloaded' })
     }
+  }
+
+  async open(page) {
+    const { url, readyTimeoutMs } = this.settings
+    await this.prepareAuth(page)
     await this.assertNoChallenge(page)
 
     // Insist on VISIBLE, not merely present: a leftover overlay (a file
@@ -229,8 +234,159 @@ export class DomProvider extends Provider {
     await page.locator(s.composer).first().waitFor({ state: 'visible', timeout: 30000 })
   }
 
+  async resumeThread(page, threadId) {
+    const spec = this.sel.thread
+    if (!spec?.urlTemplate || !/^[A-Za-z0-9_-]+$/.test(threadId)) {
+      throw new BridgeError(`${this.id}: invalid provider thread id`, { status: 400, code: 'invalid_request' })
+    }
+    const url = new URL(spec.urlTemplate.replace('{id}', threadId), this.origin).href
+    await page.goto(url, { waitUntil: 'domcontentloaded' })
+    await page.locator(this.sel.composer).first().waitFor({ state: 'visible', timeout: this.settings.readyTimeoutMs })
+  }
+
+  async threadIds(page) {
+    if (!this.sel.thread?.urlPattern) return []
+    const pattern = this.sel.thread.urlPattern
+    return page.locator('a[href]').evaluateAll((links, pattern) => {
+      const re = new RegExp(pattern)
+      return [...new Set(links.map((a) => {
+        try { return new URL(a.href).pathname.match(re)?.[1] ?? null } catch { return null }
+      }).filter(Boolean))]
+    }, pattern).catch(() => [])
+  }
+
+  async currentThread(page, ctx = {}) {
+    const current = new URL(page.url())
+    if (current.origin !== this.origin || !this.sel.thread?.urlPattern) return null
+    const fromUrl = current.pathname.match(new RegExp(this.sel.thread.urlPattern))?.[1] ?? null
+    if (fromUrl) return fromUrl
+    const before = new Set(ctx.threadIdsBefore ?? [])
+    return (await this.threadIds(page)).find((id) => !before.has(id)) ?? null
+  }
+
   async turnCount(page) {
     return count(page, this.sel.responseBlocks)
+  }
+
+  async lastResponseText(page) {
+    const n = await count(page, this.sel.responseBlocks)
+    if (!n) return null
+    return readRenderedText(page, { blocks: this.sel.responseBlocks, text: this.sel.responseText }, n - 1)
+  }
+
+  async responseTexts(page) {
+    const n = await count(page, this.sel.responseBlocks)
+    return Promise.all(Array.from({ length: n }, (_, i) =>
+      readRenderedText(page, { blocks: this.sel.responseBlocks, text: this.sel.responseText }, i)
+    ))
+  }
+
+  /**
+   * Hydrate and export the active branch of a thread.
+   *
+   * Long chat UIs recycle DOM nodes. A single locator snapshot is therefore
+   * not a history. Sweep bottom->top and top->bottom, collecting stable
+   * provider message ids at every viewport; repeat until a whole sweep adds
+   * nothing. `complete` is true only when both scroll boundaries were
+   * physically reached.
+   */
+  async exportThread(page, threadId) {
+    const selector = '[data-message-author-role][data-message-id]'
+    await page.locator(selector).first().waitFor({ state: 'attached', timeout: this.settings.readyTimeoutMs })
+    const messages = new Map()
+    const order = []
+    let reachedTop = false
+    let reachedBottom = false
+
+    const collect = async () => {
+      const rows = await page.locator(selector).evaluateAll((els) => els.map((el) => {
+        const links = [...el.querySelectorAll('a[href]')].map((a) => ({
+          href: a.getAttribute('href'), label: (a.getAttribute('aria-label') || a.textContent || '').trim(),
+        }))
+        const media = [...el.querySelectorAll('img[src], video[src], audio[src]')].map((e) => ({
+          kind: e.tagName.toLowerCase(), src: e.getAttribute('src'), alt: e.getAttribute('alt') || null,
+        }))
+        const fileControls = [...el.querySelectorAll('button, [role="button"]')].map((e) =>
+          (e.getAttribute('aria-label') || e.textContent || '').trim()
+        ).filter((x) => /\.(?:[a-z0-9]{1,12})(?:\s|$)|download|baixar/i.test(x))
+        return {
+          id: el.getAttribute('data-message-id'), role: el.getAttribute('data-message-author-role'),
+          model_slug: el.getAttribute('data-message-model-slug') || null,
+          text: (el.innerText || '').trim(), links, media, file_controls: [...new Set(fileControls)],
+        }
+      }))
+      for (const row of rows) if (row.id) messages.set(row.id, row)
+      return rows
+    }
+
+    const scrollState = () => page.locator(selector).first().evaluate((el) => {
+      let node = el.parentElement
+      let best = document.scrollingElement
+      while (node) {
+        const style = getComputedStyle(node)
+        if (node.scrollHeight > node.clientHeight + 8 && /(auto|scroll)/.test(style.overflowY)) { best = node; break }
+        node = node.parentElement
+      }
+      return { top: best.scrollTop, max: Math.max(0, best.scrollHeight - best.clientHeight) }
+    })
+    const move = (to) => page.locator(selector).first().evaluate((el, to) => {
+      let node = el.parentElement
+      let best = document.scrollingElement
+      while (node) {
+        const style = getComputedStyle(node)
+        if (node.scrollHeight > node.clientHeight + 8 && /(auto|scroll)/.test(style.overflowY)) { best = node; break }
+        node = node.parentElement
+      }
+      best.scrollTop = to === 'top' ? 0 : best.scrollHeight
+    }, to)
+
+    for (let pass = 0; pass < 4; pass++) {
+      const before = messages.size
+      await move('bottom'); await sleep(500); await collect()
+      reachedBottom = (await scrollState()).top >= (await scrollState()).max - 2
+      let prior = Infinity
+      for (let step = 0; step < 200; step++) {
+        const state = await scrollState()
+        if (state.top <= 1) { reachedTop = true; break }
+        const next = Math.max(0, state.top - Math.max(300, Math.floor((state.max + 1) / 12)))
+        if (next >= prior) break
+        prior = next
+        await page.locator(selector).first().evaluate((el, value) => {
+          let node = el.parentElement; let best = document.scrollingElement
+          while (node) { const s=getComputedStyle(node); if(node.scrollHeight>node.clientHeight+8&&/(auto|scroll)/.test(s.overflowY)){best=node;break} node=node.parentElement }
+          best.scrollTop = value
+        }, next)
+        await sleep(250); await collect()
+      }
+      await move('top'); await sleep(600); await collect(); reachedTop = (await scrollState()).top <= 1
+      await move('bottom'); await sleep(600); await collect(); reachedBottom = (await scrollState()).top >= (await scrollState()).max - 2
+      if (messages.size === before) break
+    }
+
+    // Establish chronological order in a dedicated top->bottom pass. The
+    // Map's insertion order reflects discovery during hydration, not thread
+    // order, and can therefore start at the newest viewport.
+    await move('top'); await sleep(500)
+    for (let step = 0; step < 200; step++) {
+      for (const row of await collect()) if (!order.includes(row.id)) order.push(row.id)
+      const state = await scrollState()
+      if (state.top >= state.max - 2) { reachedBottom = true; break }
+      const next = Math.min(state.max, state.top + Math.max(300, Math.floor((state.max + 1) / 12)))
+      await page.locator(selector).first().evaluate((el, value) => {
+        let node=el.parentElement; let best=document.scrollingElement
+        while(node){const s=getComputedStyle(node);if(node.scrollHeight>node.clientHeight+8&&/(auto|scroll)/.test(s.overflowY)){best=node;break}node=node.parentElement}
+        best.scrollTop=value
+      }, next)
+      await sleep(250)
+    }
+
+    const ordered = [...order.map((id) => messages.get(id)).filter(Boolean), ...[...messages].filter(([id]) => !order.includes(id)).map(([, row]) => row)]
+    return {
+      provider: this.id, thread_id: threadId, url: page.url(), exported_at: new Date().toISOString(),
+      branch: 'active', complete: reachedTop && reachedBottom,
+      evidence: { reached_top: reachedTop, reached_bottom: reachedBottom, stable_message_ids: true, message_count: ordered.length },
+      messages: ordered,
+    }
   }
 
   // --- controls ------------------------------------------------------------
@@ -578,39 +734,65 @@ export class DomProvider extends Provider {
     // gets its OWN short budget rather than the full response timeout.
     // Waiting ten minutes to discover nothing was ever sent tells you
     // nothing; failing in one, retryably, tells you plenty.
-    const total = await waitFor(
-      async () => {
-        const n = await count(page, s.responseBlocks)
-        return n > before ? n : null
-      },
-      { timeout: cfg.submitAckMs ?? 60000, poll: cfg.pollMs, what: 'a response turn to appear' }
-    )
-    ctx.index = total - 1
+    const responseProbe = async () => {
+        const texts = await this.responseTexts(page)
+        const prior = ctx.responseTextsBefore ?? []
+        // The history may be virtualized, inserted at either end, or keep a
+        // fixed number of DOM nodes. Attribute the response to the block
+        // whose content actually changed, rather than deriving an index from
+        // a count that can race with history hydration.
+        for (let i = texts.length - 1; i >= 0; i--) {
+          if (texts[i] !== (prior[i] ?? '') && (texts[i] || texts.length > prior.length)) return { total: texts.length, index: i }
+        }
+        return null
+      }
+    let acknowledged
+    try {
+      acknowledged = await waitFor(responseProbe, {
+        timeout: cfg.submitAckMs ?? 60000, poll: cfg.pollMs, what: 'a response turn to appear',
+      })
+    } catch (e) {
+      if (!(e instanceof TimeoutError) || !(await isGenerating(page, s.stopButton))) throw e
+      // Thinking models can acknowledge the request (composer cleared and a
+      // stop control appeared) long before they expose an assistant block.
+      // That is live progress, not a failed submit, so give it the response
+      // budget. A genuinely wedged turn still ends in a typed timeout.
+      this.log?.debug('request is still generating without an answer block; extending to the response timeout')
+      acknowledged = await waitFor(responseProbe, {
+        timeout: cfg.responseTimeoutMs, poll: cfg.pollMs, what: 'a thinking model to expose its response',
+      })
+    }
+    ctx.index = acknowledged.index
 
     const transient = (s.transientText ?? []).map((t) => new RegExp(t, 'i'))
     const searchRe = s.searchTransient ? new RegExp(s.searchTransient, 'i') : null
     ctx.browsedHint = false
 
-    await waitStable(
-      async () => {
-        const t = await readRenderedText(page, { blocks: s.responseBlocks, text: s.responseText }, ctx.index)
-        if (searchRe && searchRe.test(t)) ctx.browsedHint = true
-        return t
-      },
-      {
-        checks: cfg.settleChecks,
-        timeout: cfg.responseTimeoutMs,
-        poll: cfg.pollMs,
-        what: 'the answer to finish',
-        // A placeholder IS the whole content at that moment ("Searching the
-        // internet", "Thinking"), so only treat SHORT text as one. Matching
-        // these words anywhere rejects a real answer forever: with extended
-        // thinking on, the response block carries its own "Show thinking"
-        // control, so every read looked transient and the request sat until
-        // the 600s timeout even though the answer was complete on screen.
-        accept: (t) => !!t && !(t.trim().length <= 64 && transient.some((re) => re.test(t))),
-      }
-    )
+    const usable = (t) => !!t && !(t.trim().length <= 64 && transient.some((re) => re.test(t)))
+    try {
+      await waitStable(
+        async () => {
+          const t = await readRenderedText(page, { blocks: s.responseBlocks, text: s.responseText }, ctx.index)
+          if (searchRe && searchRe.test(t)) ctx.browsedHint = true
+          return t
+        },
+        {
+          checks: cfg.settleChecks,
+          timeout: cfg.responseTimeoutMs,
+          poll: cfg.pollMs,
+          what: 'the answer to finish',
+          // A placeholder IS the whole content at that moment ("Searching the
+          // internet", "Thinking"), so only treat SHORT text as one.
+          accept: usable,
+        }
+      )
+    } catch (e) {
+      if (!(e instanceof TimeoutError)) throw e
+      const partial = await readRenderedText(page, { blocks: s.responseBlocks, text: s.responseText }, ctx.index)
+      if (!usable(partial)) throw e
+      ctx.truncated = true
+      this.log?.warn(`response timeout after usable text appeared; returning ${partial.length} chars as truncated`)
+    }
 
     if (await isGenerating(page, s.stopButton)) {
       await waitFor(async () => !(await isGenerating(page, s.stopButton)), {
@@ -621,6 +803,8 @@ export class DomProvider extends Provider {
         // Stability already said the text was final; a stop control that
         // lingers should not fail an otherwise complete answer.
         if (!(e instanceof TimeoutError)) throw e
+        ctx.truncated = true
+        this.log?.warn('the answer text stabilized but the generating control did not clear; returning it as truncated')
       })
     }
     return ctx
@@ -635,7 +819,14 @@ export class DomProvider extends Provider {
    */
   async #awaitWire(ctx) {
     const cfg = this.settings
-    const res = await ctx.wire.finished(cfg.responseTimeoutMs)
+    let lastProgress = ''
+    const res = await ctx.wire.finished(cfg.responseTimeoutMs, (partial) => {
+      if (!ctx.onProgress || !partial?.body) return
+      const decoded = decodeDeltaStream(partial.body)
+      if (!decoded.text || decoded.text === lastProgress) return
+      lastProgress = decoded.text
+      ctx.onProgress(decoded.text)
+    })
     if (!res.ok && res.status && !(res.body && res.body.includes('data:'))) {
       let detail = res.body.slice(0, 300)
       try {
@@ -758,6 +949,7 @@ export class DomProvider extends Provider {
       sources,
       browsed,
       searched,
+      truncated: !!ctx.truncated,
     }
   }
 

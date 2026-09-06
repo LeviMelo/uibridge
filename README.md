@@ -2,7 +2,7 @@
 
 A local, OpenAI-compatible HTTP API backed by chat UIs you already pay for.
 
-It replaces moving CSVs and PDFs in and out of a chat window by hand. Your
+It replaces moving files in and out of a chat window by hand. Your
 pipeline calls `http://127.0.0.1:8477/v1/chat/completions`; a real browser,
 signed in as you, does what your hands would have done, and the answer comes
 back as JSON — with its tables parsed, its LaTeX intact, its citations
@@ -13,8 +13,9 @@ subscription already has.
 
 ```bash
 npm install
-node bin/uibridge.mjs login gemini    # sign in once, in a visible window
-node bin/uibridge.mjs serve           # start the API
+npm link                              # expose the local `uibridge` command
+uibridge login gemini                 # sign in once, in a visible window
+uibridge serve                        # start the API
 ```
 
 ```python
@@ -27,6 +28,8 @@ req = urllib.request.Request(
         "messages": [{"role": "user", "content": "Extract the primary outcome as JSON."}],
         "attachments": [r"C:\corpus\trial_0412.pdf"],
         "modes": {"thinking": False},
+        # Optional continuation:
+        # "thread_id": prior_response["_uibridge"]["thread_id"],
     }).encode(),
     headers={"Content-Type": "application/json"},
 )
@@ -40,17 +43,31 @@ print(ub["files"])                                # files it generated, on disk
 print(ub["browsed"], ub["sources"])               # whether it searched, and what it cited
 ```
 
+Set `"stream": true` to receive OpenAI-compatible server-sent events. ChatGPT
+content is emitted incrementally from the response already arriving in the
+page; DOM-only providers emit one content chunk when extraction completes.
+The final chunk carries `_uibridge`, followed by `data: [DONE]`.
+
 ## Commands
 
 ```bash
 node bin/uibridge.mjs serve                 # the API (default 127.0.0.1:8477)
 node bin/uibridge.mjs login <provider>      # sign in; you type the password, never this tool
+uibridge logout <provider>                  # clear that dedicated profile's site session
+uibridge status [provider] --json           # scriptable authentication verdict
+uibridge models --json                      # callable model ids
+uibridge ask gemini --thread=<native-id> "continue here"
+uibridge ask chatgpt --file=anything.bin "use this file"
+uibridge chat chatgpt --thread=<native-id>  # persistent same-tab REPL
+uibridge threads [provider] --json           # native threads recorded locally
+uibridge thread <provider> <native-id> --json # turns and sent/downloaded files
+uibridge export chatgpt <native-id> --json   # active-branch history export
 node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
 node bin/uibridge.mjs ask chatgpt "..."     # one prompt, no server
 node bin/uibridge.mjs ask chatgpt --file=paper.pdf --model=chatgpt-5.6-high "..."
 node bin/uibridge.mjs doctor chatgpt --anon # prove signed-OUT is detected (throwaway profile)
 node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabulary + network
-npm test                                    # 60 unit tests, no browser, ~1s
+npm test                                    # 68 unit tests, no browser, ~2s
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -63,6 +80,7 @@ honest about what happened rather than to look tidy:
 | field | why it exists |
 |---|---|
 | `provenance.model.applied` / `.verified` | Requested is not applied. Gemini genuinely drops model switches (its own bug), so the selection is retried and then read back from the UI. `verified: false` means the UI is on something else — `applied` names what. For a systematic review this is the audit trail; set `strictModel: true` in config to make a mismatch an error instead. |
+| `thread_id` | The provider's native thread UUID from its URL. Pass it as top-level `thread_id` to continue that thread; omit it for a fresh isolated thread. |
 | `provenance.final_state` | The picker label read *after* model and modes were both applied. The per-step labels are stale by then. |
 | `extraction` | Which tier produced the text: `wire` (the response body the page received — the model's own markdown, ChatGPT), `copy` (the provider's own markdown via its copy control), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
 | `provenance.answered_by`, `provenance.sent_as` | Wire only. The slug the *server* says answered, and the model the page put in its own request. When a model was requested, `provenance.model.verified` is re-checked against `answered_by`, which outranks any picker label. |
@@ -73,6 +91,7 @@ honest about what happened rather than to look tidy:
 | `lossy_math` | `true` when maths was rendered but its source is not in the DOM, so the formula is glyphs rather than LaTeX. Never passed off as source. |
 | `tables`, `code_blocks` | Parsed from that markdown, so a pipeline gets rows and source instead of a string to re-parse. |
 | `files` | Files the provider *generated*, downloaded to `downloads/`, with small text payloads inlined. |
+| `ledger` | Local JSONL audit path for this native thread. It stores file paths, sizes and SHA-256 hashes—not prompt/answer text or credentials. |
 | `browsed`, `sources` | What the UI actually did. Providers routinely answer from their weights despite being told to search. |
 | `provider_error` | `true` when the delivered text is the provider's own error notice ("Sorry, something went wrong") rather than an answer. Still a 200, still real content: the UI produced a message and this retrieved it, which is all the bridge promises. Retry-or-skip is your policy, and this flag means you needn't match on prose. |
 | `usage` | Always zero. Token counts are not observable through a UI, and inventing them would be worse than admitting it. |
@@ -117,6 +136,7 @@ uploads, citations and file retrieval are all inherited.
 ```bash
 node bin/uibridge.mjs login chatgpt
 node bin/uibridge.mjs capture chatgpt      # writes DOM + network under testdata/capture/
+node bin/uibridge.mjs capture chatgpt --continue "follow-up"  # reuse the open thread during calibration
 ```
 
 Fill in `src/providers/<id>/selectors.json` from that capture and set
@@ -234,7 +254,7 @@ Live suite, run against Gemini with the system clipboard broken — so the
         thinking toggle verified in the picker,
         citations reported truthfully (no sources claimed when none shown),
         6 concurrent tabs isolated, 0 leakage, 4.3x speedup,
-        bad attachment rejected in 0.02s, empty messages 400, unknown model 200
+        bad attachment rejected in 0.02s, empty messages 400
 ```
 
 The one failure was Gemini refusing a model switch (`gemini-pro` requested,
@@ -244,15 +264,15 @@ correctly rather than attributing the answer to Pro. It is now retried, and
 
 ### What works today
 
-**Gemini only.** Signed in as you, one conversation per request: send a
-prompt, attach CSVs and PDFs, pick `gemini-flash` / `gemini-flash-lite` /
+**Gemini.** Signed in as you, one conversation per request: send a
+prompt, attach files accepted by the UI, pick `gemini-flash` / `gemini-flash-lite` /
 `gemini-pro`, toggle extended thinking, get markdown back with tables and
 code parsed, any file it generated already on disk, and its citations when
 it actually searched. That is the whole working surface.
 
-**ChatGPT works, and reads its answer off the network.** Signed in as you,
-one conversation per request: send a prompt, attach PDFs and CSVs (the
-upload is confirmed on the wire before the prompt goes out), pick
+**ChatGPT works, streams, and reads its answer off the network.** Signed in as you,
+one conversation per request: send a prompt, attach files accepted by the UI
+(each upload is confirmed on the wire before the prompt goes out), pick
 `chatgpt-5.6-instant` / `-medium` / `-high` or the `chatgpt-5.5-*` family,
 and get the model's own markdown back with the server's model slug in
 `provenance.answered_by`, its sources, and each citation tied to the
@@ -262,7 +282,7 @@ extraction.
 
 **Files ChatGPT generates come back too.** Its Python environment is the
 reliable one, so this is how a table of extracted data leaves the chat: ask
-for a CSV or an xlsx, and the bytes land in `downloads/` named by the
+for a generated file, and its bytes land in `downloads/` named by the
 server, byte-exact. Chrome never writes the file itself - the page fetches
 it and keeps it in memory - so the bridge keeps the response the page
 received. Code-interpreter files only; canvas documents and generated

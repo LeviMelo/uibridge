@@ -12,8 +12,9 @@ import { loadConfig, portFor, providerSettings } from './core/config.mjs'
 import { logger, requestId } from './core/log.mjs'
 import { BridgeError, ChallengeError, RequestError, SignedOutError } from './core/errors.mjs'
 import { signedOutMessage } from './core/auth.mjs'
-import { Pacer, retry } from './core/async.mjs'
+import { Pacer, retry, waitFor, waitStable } from './core/async.mjs'
 import { providerClass, providerIds } from './providers/registry.mjs'
+import { recordThreadEvent } from './core/ledger.mjs'
 
 export class Session {
   #ctx
@@ -22,6 +23,7 @@ export class Session {
   #settings
   #log
   #pacer
+  #continuationPacer
 
   constructor({ provider, settings, ctx, pool, log }) {
     this.#provider = provider
@@ -30,6 +32,7 @@ export class Session {
     this.#pool = pool
     this.#log = log
     this.#pacer = new Pacer(settings.minIntervalMs ?? 0)
+    this.#continuationPacer = new Pacer(settings.continuationIntervalMs ?? 0)
   }
 
   static async open(id, { cfg = loadConfig(), headless } = {}) {
@@ -74,7 +77,7 @@ export class Session {
    */
   async sessionState() {
     return this.#pool.withTab(async (page) => {
-      await this.#provider.open(page).catch(() => {})
+      await this.#provider.prepareAuth(page)
       return this.#provider.sessionState(page)
     })
   }
@@ -114,7 +117,7 @@ export class Session {
    * occupy a tab and burn the full upload timeout before failing, so a
    * three-second mistake cost three minutes.
    */
-  async ask({ prompt, files = [], model = null, modes = {} }) {
+  async ask({ prompt, files = [], model = null, modes = {}, onProgress = null, threadId = null }) {
     if (!prompt || !prompt.trim()) throw new RequestError('prompt is empty')
 
     const resolved = files.map((f) => {
@@ -139,7 +142,7 @@ export class Session {
     // fresh tab, because withTab discards a failed one.
     const RETRYABLE = new Set(['compose_failed', 'submit_failed'])
     return retry(
-      () => this.#attempt({ prompt, files: resolved, model, modes, rid, log, started }),
+      () => this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started }),
       {
         attempts: 2,
         isRetryable: (e) => RETRYABLE.has(e.code),
@@ -148,23 +151,38 @@ export class Session {
     )
   }
 
-  async #attempt({ prompt, files, model, modes, rid, log, started }) {
+  async #attempt({ prompt, files, model, modes, onProgress, threadId, rid, log, started }) {
     const resolved = files
     // Pace BEFORE taking a tab, so a queued request holds nothing while it
     // waits and the spacing applies across the whole provider.
-    const waited = await this.#pacer.wait()
+    const pacer = threadId ? this.#continuationPacer : this.#pacer
+    const waited = await pacer.wait()
     if (waited > 1000) log.debug(`paced: waited ${(waited / 1000).toFixed(1)}s (minIntervalMs=${this.#pacer.intervalMs})`)
     return this.#pool.withTab(async (page) => {
       const provider = this.#provider
       provider.log = log
 
-      await provider.open(page)
       // The state, not a boolean: the caller is told WHAT was observed, which
       // is the difference between an argument and an instruction.
+      await provider.prepareAuth(page)
       const session = await provider.sessionState(page)
       if (session.state === 'challenge') throw new ChallengeError(this.id, session.evidence?.challengeText ?? 'a verification challenge')
       if (session.state !== 'in') throw new SignedOutError(this.id, signedOutMessage(this.id, session))
-      if (this.#settings.newChatPerRequest) await provider.newConversation(page)
+      // Only authenticated sessions are allowed to touch the signed-in UI
+      // contract. Anonymous apps often use a different composer entirely.
+      await provider.open(page)
+      const requestedThread = threadId
+      if (requestedThread) {
+        // A persistent CLI/API session keeps its pooled tab on the thread.
+        // Reloading the same native URL for every follow-up is wasted work
+        // and forces long history to hydrate again.
+        if ((await provider.currentThread(page).catch(() => null)) !== requestedThread) {
+          await provider.resumeThread(page, requestedThread)
+          await provider.open(page)
+        }
+      } else if (this.#settings.newChatPerRequest) {
+        await provider.newConversation(page)
+      }
 
       // A blocking notice is a fact to carry, not a reason to stop: on
       // ChatGPT the rate-limit modal locks history, not sending. But it must
@@ -200,12 +218,53 @@ export class Session {
 
       if (resolved.length) await provider.attach(page, resolved)
 
-      const ctx = { turnsBefore: await provider.turnCount?.(page) ?? (await countTurns(page, provider)) }
+      // A resumed long thread hydrates asynchronously. Taking the baseline
+      // while it still has zero responses makes the first old block look
+      // like the new answer. Wait for existing history, then for its visible
+      // window to settle before submitting.
+      if (requestedThread) {
+        await waitFor(async () => (await provider.responseTexts(page)).length || null, {
+          timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
+          what: 'the existing thread history to load',
+        })
+        await waitStable(async () => JSON.stringify(await provider.responseTexts(page)), {
+          checks: 3, timeout: this.#settings.readyTimeoutMs, poll: this.#settings.pollMs,
+          what: 'the existing thread history to settle', accept: (value) => value !== '[]',
+        })
+      }
+
+      const ctx = {
+        responseTextsBefore: await provider.responseTexts(page).catch(() => []),
+        turnsBefore: await provider.turnCount?.(page) ?? (await countTurns(page, provider)),
+        lastResponseBefore: await provider.lastResponseText(page).catch(() => null),
+        threadIdsBefore: await provider.threadIds(page).catch(() => []),
+        onProgress,
+      }
       await provider.submit(page, prompt, ctx)
       const tSubmit = Date.now()
 
       await provider.awaitCompletion(page, ctx)
       const result = await provider.extract(page, ctx)
+
+      // DOM transports cannot expose reliable partial markdown, but still
+      // participate in the streaming API with one final content update.
+      if (onProgress && !ctx.wire) onProgress(result.text)
+
+      const answeredThread = await waitFor(() => provider.currentThread(page, ctx), {
+        timeout: 10000,
+        poll: this.#settings.pollMs,
+        what: 'the provider to expose the answered thread URL',
+      }).catch(() => null)
+      if (!answeredThread) {
+        throw new BridgeError(`${this.id}: the answer arrived but its UI thread could not be identified`, {
+          status: 502, code: 'thread_unidentified', retryable: true,
+        })
+      }
+      if (requestedThread && requestedThread !== answeredThread) {
+        throw new BridgeError(`${this.id}: requested thread changed while sending; refusing to misattribute the answer`, {
+          status: 502, code: 'thread_mismatch', retryable: true,
+        })
+      }
 
       // THE MODEL THAT ANSWERED, when the transport can see it. A wire
       // transport reads the server's own slug off the response; that is the
@@ -246,20 +305,57 @@ export class Session {
           `${result.sources.length ? `, ${result.sources.length} source(s)` : ''})`
       )
 
-      return {
+      const completed = {
         ...result,
+        thread_id: answeredThread,
         provenance,
         throttle_notice: throttled ?? null,
         notices,
         request_id: rid,
         elapsed_ms: Date.now() - started,
       }
+      try {
+        const ledger = await recordThreadEvent(this.#settings.ledgerDir, {
+          at: new Date().toISOString(), request_id: rid, provider: this.id,
+          thread_id: answeredThread, requested_thread_id: requestedThread,
+          model, modes, inputs: resolved, outputs: result.files,
+          result: { characters: result.text.length, sha256: await textHash(result.text), extraction: result.extraction, truncated: !!result.truncated, provider_error: !!result.provider_error },
+        })
+        completed.ledger = { path: ledger.path }
+      } catch (e) {
+        log.warn(`could not write thread ledger: ${e.message}`)
+        completed.ledger = { error: e.message }
+      }
+      return completed
+    })
+  }
+
+  /** Export the complete active branch of one provider-native thread. */
+  async exportThread(threadId) {
+    if (!threadId) throw new RequestError('thread id is required')
+    return this.#pool.withTab(async (page) => {
+      const provider = this.#provider
+      await provider.prepareAuth(page)
+      const session = await provider.sessionState(page)
+      if (session.state === 'challenge') throw new ChallengeError(this.id, session.evidence?.challengeText ?? 'a verification challenge')
+      if (session.state !== 'in') throw new SignedOutError(this.id, signedOutMessage(this.id, session))
+      await provider.resumeThread(page, threadId)
+      await provider.open(page)
+      const exported = await provider.exportThread(page, threadId)
+      const actual = await provider.currentThread(page)
+      if (actual !== threadId) throw new BridgeError(`${this.id}: export navigated away from the requested thread`, { status: 502, code: 'thread_mismatch' })
+      return exported
     })
   }
 
   async close() {
     await this.#pool.close()
   }
+}
+
+async function textHash(text) {
+  const { createHash } = await import('node:crypto')
+  return createHash('sha256').update(text).digest('hex')
 }
 
 /** Turn count before submitting, so we can identify the new turn. */
