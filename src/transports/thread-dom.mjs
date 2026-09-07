@@ -151,9 +151,25 @@ const STEP = (arg) => {
         })).filter((a) => a.label)
       : []
 
+    // BRANCHES. A regenerated answer (or an edited question) leaves the
+    // thread with siblings, and the walk only ever sees the ACTIVE one. The
+    // pager the UI draws for them ("2/3") is the only honest evidence that
+    // other versions exist, so it is read and reported even when they are
+    // not visited - an export that silently drops two thirds of a message's
+    // versions, without saying so, is a trap for whoever reads it later.
+    let branch = null
+    if (contract.branchPager) {
+      const scope = contract.branchScope ? el.closest(contract.branchScope) ?? el : el
+      for (const p of scope.querySelectorAll(contract.branchPager)) {
+        const m = (p.innerText || p.textContent || '').match(/(\d+)\s*\/\s*(\d+)/)
+        if (m && +m[2] > 0) { branch = { index: +m[1], total: +m[2] } ; break }
+      }
+    }
+
     return {
       id: ids[index],
       role: roleOf(el),
+      branch,
       model_slug: attr(el, contract.modelAttr),
       text,
       // WHERE THIS TEXT CAME FROM. A live ChatGPT answer is read off the
@@ -421,6 +437,13 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
       // With inferred keys, two identical messages collapse into one, and a
       // caller deserves to know that before trusting a count.
       stable_ids: messages.length > 0 && messages.every((m) => m.stable_id),
+      // How many messages have versions this walk did NOT visit, and
+      // whether anything was done about it. `branch_pager: false` means the
+      // provider has no measured pager, so the question was never asked -
+      // which is not the same as "there are none".
+      branch_pager: !!contract.branchPager,
+      branched_messages: messages.filter((m) => (m.branch?.total ?? 1) > 1).length,
+      branches_walked: false,
       mounted_at_end: last?.mounted ?? 0,
       readings: runs.length,
       order_verified: disagreements === 0,

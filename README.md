@@ -138,6 +138,7 @@ messages exist in the document at any moment, so an export is a walk, and
 | `message_count`, `ordered_count` | Messages found, and messages the walk could place. A message that was seen but never placed is still exported, flagged `order_unknown`. |
 | `stable_ids` | Identity came from the provider's own message ids. When false, identity was inferred from content and two identical messages collapse into one. |
 | `readings`, `order_verified` | Each reading sees a contiguous slice of the thread in document order. `order_verified` means the assembled order contradicts none of them. False means the transcript is not faithful — and it says so instead of pretending. |
+| `branch_pager`, `branched_messages`, `branches_walked` | Whether the provider has a calibrated control for sibling versions (regenerated answers, edited questions), how many messages have them, and whether they were visited. `branch_pager: false` means the question was never asked — which is not the same as "there are none". |
 | `mounted_at_end` | How many messages the page was holding when the walk finished. Far below `message_count` is the virtualization being handled. |
 
 `complete` is true only when both ends were reached, every message was

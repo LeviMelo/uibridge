@@ -137,15 +137,47 @@ export class DomProvider extends Provider {
    * history, not sending, so a request that otherwise worked must not be
    * turned into a failure. Returns [{ kind, name, text }].
    */
+  /**
+   * Find, report and (safely) close the site's blocking notices.
+   *
+   * A spec may match by TEXT (`match`), which is how ChatGPT's rate-limit
+   * modal is recognised, or STRUCTURALLY (no `match`), which is how a
+   * provider whose notice wording has never been observed still gets
+   * coverage. Inventing the wording would be worse than admitting we have
+   * not seen it: a made-up pattern silently matches nothing, and the caller
+   * is told "no notice" while a modal eats every click.
+   *
+   * Structural specs classify the text they find with `classify`, and
+   * anything unrecognised is reported as `kind: 'unknown'` rather than
+   * squeezed into a category.
+   *
+   * SAFETY: with a structural spec, ANY dialog matches - including one
+   * asking whether to delete a conversation. So a button is only ever
+   * clicked when its own label matches `dismissText`; otherwise the only
+   * gesture used is Escape, which cannot confirm anything.
+   */
   async dismissNotices(page) {
     const specs = this.sel.notices ?? []
     const found = []
     for (const spec of specs) {
-      const re = new RegExp(spec.match, 'i')
-      const dialog = page.locator(spec.dialog ?? "[role='dialog']").filter({ hasText: re }).first()
-      if (!(await dialog.count().catch(() => 0))) continue
+      const re = spec.match ? new RegExp(spec.match, 'i') : null
+      const all = page.locator(spec.dialog ?? "[role='dialog']")
+      const base = re ? all.filter({ hasText: re }) : all
+
+      // Only a VISIBLE overlay is a notice. Angular and React apps keep
+      // detached dialog containers in the tree, and reporting those as
+      // notices would cry wolf on every request.
+      let dialog = null
+      const n = await base.count().catch(() => 0)
+      for (let i = 0; i < n; i++) {
+        const candidate = base.nth(i)
+        if (await candidate.isVisible().catch(() => false)) { dialog = candidate; break }
+      }
+      if (!dialog) continue
+
       const text = ((await dialog.innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 240)
-      found.push({ kind: spec.kind ?? 'notice', name: spec.name ?? 'notice', text })
+      if (!text) continue
+      found.push({ kind: classifyNotice(spec, text), name: spec.name ?? 'notice', text })
 
       let closed = false
       if (spec.dismiss) {
@@ -158,7 +190,7 @@ export class DomProvider extends Provider {
       // Escape is the fallback, not the first choice: a modal that ignores it
       // would otherwise look dismissed and keep eating clicks.
       if (!closed) await page.keyboard.press('Escape').catch(() => {})
-      const gone = await waitFor(async () => ((await dialog.count().catch(() => 0)) ? null : true), {
+      const gone = await waitFor(async () => ((await dialog.isVisible().catch(() => false)) ? null : true), {
         timeout: 5000,
         poll: this.settings.pollMs,
         what: `the "${spec.name}" notice to close`,
@@ -1144,4 +1176,20 @@ export class DomProvider extends Provider {
       throw new ContractError(this.id, key, sel)
     }
   }
+}
+
+/**
+ * What kind of notice is this text?
+ *
+ * A spec that names its kind outright (ChatGPT's measured rate-limit modal)
+ * keeps it. A structural spec carries `classify` rules instead, and text
+ * matching none of them stays `unknown` - which a caller can act on
+ * ("something is blocking the UI") without being told a category we made up.
+ */
+export function classifyNotice(spec, text) {
+  if (spec.kind && spec.kind !== 'unknown') return spec.kind
+  for (const rule of spec.classify ?? []) {
+    if (new RegExp(rule.match, 'i').test(text)) return rule.kind
+  }
+  return 'unknown'
 }

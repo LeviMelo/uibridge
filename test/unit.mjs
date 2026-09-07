@@ -1108,3 +1108,34 @@ test('a foreign service is never mistaken for an old uibridge', async () => {
   assert.equal(identify({ status: 'ok', providers: ['a'] }), 'foreign')
   assert.equal(isUibridge('foreign'), false)
 })
+
+// --- notices: recognise what we measured, never invent the rest -----------
+
+import { classifyNotice } from '../src/providers/dom-provider.mjs'
+
+test('a measured spec keeps its own kind', () => {
+  assert.equal(classifyNotice({ kind: 'rate_limit' }, 'Excesso de solicitações'), 'rate_limit')
+})
+
+test('a structural spec classifies what it recognises', () => {
+  const spec = { kind: 'unknown', classify: [{ kind: 'rate_limit', match: 'too many|excesso' }] }
+  assert.equal(classifyNotice(spec, 'You are sending too many requests'), 'rate_limit')
+})
+
+test('unrecognised notice text stays unknown rather than being forced into a kind', () => {
+  // A caller can act on "something is blocking the UI". It cannot act on a
+  // category we made up, and would not know it was made up.
+  const spec = { kind: 'unknown', classify: [{ kind: 'rate_limit', match: 'too many' }] }
+  assert.equal(classifyNotice(spec, 'Gemini has a new feature to show you'), 'unknown')
+})
+
+test('gemini ships a structural notice spec with no invented wording', async () => {
+  const { readFileSync } = await import('node:fs')
+  const sel = JSON.parse(readFileSync(new URL('../src/providers/gemini/selectors.json', import.meta.url), 'utf8'))
+  const [spec] = sel.notices
+  assert.equal(spec.match, undefined, 'a match pattern here would be a guess at wording never observed')
+  assert.ok(spec.dismissText.startsWith('^') && spec.dismissText.endsWith('$'), 'dismissal must be an anchored allowlist of close labels, not any button')
+  assert.ok(new RegExp(spec.dismissText, 'i').test(' Entendi '), 'a real button label carries whitespace')
+  assert.equal(new RegExp(spec.dismissText, 'i').test('Excluir'), false, 'a destructive label must never match')
+  assert.ok(spec.classify.length > 0)
+})

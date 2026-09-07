@@ -199,7 +199,9 @@
     "authority here: those names are httpOnly, which is exactly why",
     "document.cookie cannot see them and the browser context must be asked",
     "instead. The DOM markers below rank last - they are a guess about a",
-    "translated string, and this account renders in pt-BR."
+    "translated string, and this account renders in pt-BR.",
+    "RE-VERIFIED 2026-09-06: the live jar carries SID, __Secure-1PSID and",
+    "__Secure-3PSID (153 chars each), which is what authCookiePattern matches."
   ],
   "_signIn": [
     "A rendered composer does NOT mean signed in: an anonymous session shows",
@@ -217,5 +219,48 @@
     "happily returns that as the model's answer - 59 chars, markdown=true,",
     "indistinguishable from a real reply. In a batch that silently poisons rows.",
     "Matching it turns the failure into a retryable error instead."
+  ],
+  "notices": [
+    {
+      "name": "overlay",
+      "kind": "unknown",
+      "dialog": ".cdk-overlay-container [role='dialog'], .cdk-overlay-container [role='alertdialog'], mat-dialog-container, .mat-mdc-snack-bar-container, snack-bar-container, [role='alertdialog']",
+      "dismiss": "button",
+      "dismissText": "^\\s*(OK|Ok|Entendi|Entendido|Fechar|Dispensar|Descartar|Close|Got it|Dismiss)\\s*$",
+      "classify": [
+        {
+          "kind": "rate_limit",
+          "match": "excesso|limite de|too many|rate limit|slow down|tente novamente mais tarde|try again later"
+        },
+        {
+          "kind": "capacity",
+          "match": "sobrecarregad|overloaded|indispon|unavailable|no momento"
+        }
+      ]
+    }
+  ],
+  "_notices": [
+    "MEASURED 2026-09-06: a freshly loaded gemini.google.com has NO overlay",
+    "container at all - no .cdk-overlay-container, no [role=dialog], no",
+    "snackbar. Angular CDK IS in use (the transcript carries .cdk-visually-hidden",
+    "labels), so CDK's overlay container is where a notice will appear, but its",
+    "WORDING HAS NEVER BEEN OBSERVED and is not guessed here.",
+    "",
+    "This spec is therefore STRUCTURAL: it has no `match`, so it reports any",
+    "visible overlay. `classify` gives kinds to text we can recognise; anything",
+    "else is reported as kind 'unknown', which is honest - a caller learns the",
+    "UI is blocked without being handed a category we invented.",
+    "",
+    "SAFETY: because a structural spec matches ANY dialog - including one asking",
+    "whether to delete a conversation - a button is only clicked when its own",
+    "label matches dismissText exactly. Otherwise the only gesture used is",
+    "Escape, which cannot confirm anything.",
+    "",
+    "TO CALIBRATE PROPERLY: when Gemini next shows a notice, run",
+    "`uibridge capture gemini` or read .uibridge/daemon.log - dismissNotices",
+    "logs the full text it saw - then add a `match` and a measured kind here.",
+    "dismissText is anchored but tolerates surrounding whitespace: a button's",
+    "innerText carries padding, and a strictly anchored ^...$ matched nothing",
+    "- measured, the close button was found and then never clicked."
   ]
 }

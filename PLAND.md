@@ -834,3 +834,94 @@ are the same, the provenance is not.
   `service` and `protocol`; a daemon predating that is recognised as
   `legacy` - enough to be stopped by `uibridge stop`, never enough to be
   sent a prompt.
+
+## 12. Closing the open items (2026-09-06, phase 4)
+
+### 12.1 Cookie contracts: now measured, not guessed
+
+Cookie NAMES and lengths were read from both live profiles; values never
+are. ChatGPT's session cookie is CHUNKED - the jar holds
+`__Secure-next-auth.session-token.0` (3933 chars) and `.1` (200 chars) and
+no unchunked name at all - so `authCookiePattern` is deliberately a prefix
+match. It stays a positive-only signal: the verdict still falls through to
+`/api/auth/session` and then to the anonymous-bundle test. Gemini's
+`SID`/`__Secure-1PSID`/`__Secure-3PSID` (153 chars each) were re-verified.
+
+### 12.2 Gemini notices: structural, because the wording has never been seen
+
+Measured: a freshly loaded gemini.google.com has NO overlay container at
+all - no `.cdk-overlay-container`, no `[role=dialog]`, no snackbar. Angular
+CDK is in use (the transcript carries `.cdk-visually-hidden` labels), so
+that is where a notice will appear, but its text is unobserved and is NOT
+guessed.
+
+`dismissNotices` therefore supports two kinds of spec:
+
+- **Text-matched** (`match`), which is how ChatGPT's measured rate-limit
+  modal is recognised.
+- **Structural** (no `match`), which reports any VISIBLE overlay and
+  classifies it with `classify` rules. Text matching nothing stays
+  `kind: 'unknown'` - a caller can act on "the UI is blocked" but is never
+  handed a category we invented.
+
+SAFETY, because a structural spec matches any dialog including "delete this
+conversation?": a button is only clicked when its own label matches an
+anchored allowlist (`OK|Entendi|Fechar|Close|...`). Otherwise the only
+gesture is Escape, which cannot confirm anything.
+
+Validated live against a real Gemini page with two injected overlays: the
+dismissible one was detected and classified `rate_limit`; the destructive
+one was detected, classified `unknown`, and its "Excluir" button was NOT
+clicked. (The anchors initially rejected the close button too - a button's
+innerText carries whitespace - so the allowlist now tolerates padding.)
+
+### 12.3 Branches: reported, not yet walked
+
+Every exported message carries `branch: {index, total}` when the provider
+has a measured pager, and the evidence block carries `branch_pager`,
+`branched_messages` and `branches_walked`. `branch_pager: false` means the
+provider has no calibrated pager, which is honestly different from "this
+thread has no branches".
+
+ChatGPT's pager could NOT be measured on 2026-09-06: creating a sibling
+needs a successful regeneration, and the site declined one all evening (the
+"Tente de novo - 5.6 Sol" item was clicked and no second version appeared,
+consistent with the history lock we hit repeatedly). Guessing a selector
+would be worse than leaving it out: a wrong one matches nothing and looks
+exactly like "no branches".
+
+TO CALIBRATE: on a thread with a regenerated answer, hover the assistant
+turn, find the pager near the action bar (its container is the `section`
+ancestor of the message node - measured: assistant bars carry "Copiar
+resposta / Avaliar resposta / Compartilhar / Alternar modelo / Mais acoes",
+user bars "Copiar mensagem / Compartilhar prompt / Editar mensagem"), then
+set `thread.export.branchPager` (a node whose text is "2/3") and
+`branchScope` ("section"). Walking siblings additionally needs prev/next
+controls and MUTATES which branch the thread shows by default - that is why
+it must be opt-in when it is built.
+
+### 12.4 Acceptance, end to end (2026-09-06)
+
+HTTP, against `serve`:
+
+| call | result |
+|---|---|
+| `GET /health` | `service: uibridge`, `protocol: 1`, session stats |
+| `GET /v1/models` | 11 model ids |
+| `GET /v1/capabilities` | per-provider model/effort contracts |
+| `GET /v1/threads` | 3 recorded native threads |
+| `POST /v1/chat/completions` | `chat.completion` envelope, `API_OK`, wire extraction, `answered_by: gpt-5-6`, usage present and zero |
+| ...with `stream: true` | SSE, 4 events, terminated by `[DONE]` |
+| `POST /v1/threads/export` | 44 messages, order-verified |
+| bad request | `400 invalid_request`, typed body |
+
+CLI: `status --json` (both providers `in`, authority = the app's own
+session endpoint), `models`, `threads`, `thread` (19 ledger events),
+`ask --thread` (`CLI_OK`), `chat` (two turns, one tab), `export --files`,
+`stop`, `--help`.
+
+Timing, measured the same evening: 6.2 s for a continuation on the thread
+the tab already holds; 35.5 s when the same command had to SWITCH threads
+and rehydrate a 44-message conversation; ~25 s for the first turn after a
+daemon start. Thread switching costs a page load - a caller doing many
+turns should stay on one thread, which is what `chat` does.
