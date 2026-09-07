@@ -30,3 +30,9 @@ _*.mjs
 cexp*.json
 gexp*.json
 testdata/cexp4.json
+
+# scratch run outputs
+_*.json
+_*.err
+_*.log
+.msg.tmp
