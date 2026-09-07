@@ -14,7 +14,7 @@
 import { spawn } from 'node:child_process'
 import { openSync, mkdirSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { ROOT } from './config.mjs'
+import { HOME, ROOT } from './config.mjs'
 import { BridgeError } from './errors.mjs'
 import { identify, isUibridge } from './protocol.mjs'
 
@@ -67,7 +67,7 @@ export async function ensureDaemon(cfg, { autostart = true, log } = {}) {
   // The daemon's logs must not land in this command's stdout (--json output
   // would stop being a document), but discarding them makes every failure
   // inside the daemon undiagnosable from here. They go to a file.
-  const logDir = resolve(ROOT, '.uibridge')
+  const logDir = resolve(HOME, '.uibridge')
   mkdirSync(logDir, { recursive: true })
   const logFile = openSync(resolve(logDir, 'daemon.log'), 'a')
   const child = spawn(process.execPath, [resolve(ROOT, 'bin', 'uibridge.mjs'), 'serve'], {
@@ -85,7 +85,7 @@ export async function ensureDaemon(cfg, { autostart = true, log } = {}) {
   }
   throw new BridgeError(
     `The uibridge daemon did not become ready on ${cfg.host}:${cfg.port} within 20s. ` +
-      `See ${resolve(ROOT, '.uibridge', 'daemon.log')}. Use --local only when deliberately debugging without a daemon.`,
+      `See ${resolve(HOME, '.uibridge', 'daemon.log')}. Use --local only when deliberately debugging without a daemon.`,
     { status: 503, code: 'daemon_start_failed', retryable: true }
   )
 }

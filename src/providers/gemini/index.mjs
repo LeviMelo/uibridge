@@ -38,5 +38,8 @@ export default class GeminiProvider extends DomProvider {
     concurrency: 2,
     // Spacing between request starts; see the ChatGPT provider for why.
     minIntervalMs: 8000,
+    // Gemini accepts a true headless browser with this profile's session
+    // (verified live; ChatGPT does not - see its provider).
+    headless: true,
   }
 }

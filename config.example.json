@@ -1,3 +1,5 @@
+// Copy to config.json in your uibridge home (`uibridge paths`) to override
+// defaults. Every key here is optional; the shipped defaults are measured.
 {
   "port": 8477,
   "host": "127.0.0.1",

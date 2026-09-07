@@ -45,7 +45,7 @@ export class Session {
     const { ctx } = await attachBrowser({
       port: portFor(cfg, id, providerIds.indexOf(id)),
       userDataDir: settings.profileDir,
-      headless: headless ?? cfg.headless,
+      headless: headless ?? settings.headless ?? cfg.headless,
       // Some providers expose their original markdown only through the
       // message Copy button, which needs clipboard permission.
       clipboardOrigins: [new URL(url).origin],

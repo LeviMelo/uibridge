@@ -925,3 +925,60 @@ the tab already holds; 35.5 s when the same command had to SWITCH threads
 and rehydrate a 44-message conversation; ~25 s for the first turn after a
 daemon start. Thread switching costs a page load - a caller doing many
 turns should stay on one thread, which is what `chat` does.
+
+## 13. Installing it as a service, and the window-mode question (2026-09-06)
+
+### 13.1 Code and state are now different directories
+
+`ROOT` is where the code lives; `HOME` (new, in `core/config.mjs`) is where
+state lives - config.json, the Chrome profiles holding the logins,
+downloads, ledger, exports, daemon log. They were the same directory, which
+is fine for a checkout and wrong the moment `npm i -g` puts the code under
+npm's own tree: profiles would be buried there and lost on reinstall.
+
+    UIBRIDGE_HOME              wins if set
+    <code>/config.json exists  the checkout itself (development unchanged)
+    otherwise                  %LOCALAPPDATA%\uibridge, or
+                               ~/.local/share/uibridge
+
+`config.json` was REMOVED from package.json `files` for that reason - if it
+shipped inside the package, an installed copy would see it next to the code
+and keep treating the install directory as home. `config.example.json` ships
+instead. Verified by copying bin+src to a temp directory with no
+config.json: `uibridge paths` reported home as `%LOCALAPPDATA%\uibridge`,
+and provider window modes still came out measured (gemini true, chatgpt
+offscreen) with no config file at all.
+
+New commands: `uibridge paths [--json]`, and `uibridge autostart
+[--status|--remove]` which creates a logon Scheduled Task on Windows
+(`/RL LIMITED` - this drives a browser as you and needs no elevation) or
+prints a systemd user-unit ExecStart line elsewhere.
+
+### 13.2 Window modes: headless is not one question but two
+
+The ask was "default to headless, we don't want the chat UI popping up".
+Measured, those are two different requirements:
+
+- `headless: true` - `--headless=new`. **ChatGPT refuses it.** With the
+  profile's `__Secure-next-auth.session-token.0/.1` present and sent,
+  `/api/auth/session` came back anonymous, so uibridge correctly refused to
+  send (401 signed_out) rather than let an anonymous answer into results.
+  Gemini works fine this way, verified live (`HEADLESS_GEMINI`).
+- `headless: 'offscreen'` - a real, ordinary browser parked at
+  `--window-position=-32000,-32000`. Nothing appears on screen, and the site
+  sees what it sees for a person. ChatGPT works this way, verified live
+  (`OFFSCREEN_CHATGPT`).
+- `headless: false` - a visible window. `login` forces this always (three
+  call sites in bin/ carry a comment saying so, because "make it consistent"
+  is a tempting and wrong refactor), and `serve --headed` asks for it.
+
+Defaults now live in each PROVIDER's `defaults` (gemini `true`, chatgpt
+`'offscreen'`) rather than only in config.json, so a fresh global install
+behaves correctly with no configuration. `providerSettings` merges them, and
+`Session.open` prefers the per-provider value over the global one.
+
+A WARNING learned the hard way while measuring this: a headless Chrome and a
+headed Chrome pointed at the SAME profile directory produced a browser with
+the cookies present but no session, and 26 stray Chrome processes were
+alive at one point. If a turn suddenly reports signed_out, check for leftover
+Chromes on that profile before believing anything else.

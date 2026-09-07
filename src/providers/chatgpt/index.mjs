@@ -42,7 +42,17 @@ export default class ChatGPTProvider extends DomProvider {
   // throttling during calibration (about a dozen in fifteen minutes). Twenty
   // seconds between request starts, provider-wide, is the floor; raise it in
   // config.json for long batches.
-  static defaults = { settleChecks: 4, concurrency: 1, minIntervalMs: 20000 }
+  static defaults = {
+    settleChecks: 4,
+    concurrency: 1,
+    minIntervalMs: 20000,
+    // MEASURED 2026-09-06: with --headless=new, chatgpt.com serves an
+    // ANONYMOUS session even though the profile's __Secure-next-auth
+    // .session-token cookies are present and were sent. So this provider
+    // runs a real browser parked off the visible desktop instead: nothing
+    // pops up, and the site sees what it sees for a person.
+    headless: 'offscreen',
+  }
 
   capabilities() {
     return { ...super.capabilities(), calibrated: !!this.sel.calibrated }

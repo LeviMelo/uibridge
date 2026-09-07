@@ -48,6 +48,86 @@ content is emitted incrementally from the response already arriving in the
 page; DOM-only providers emit one content chunk when extraction completes.
 The final chunk carries `_uibridge`, followed by `data: [DONE]`.
 
+## Install it once, call it from anything
+
+```bash
+npm install -g .
+```
+
+That puts `uibridge` on your PATH. Code lives wherever npm put it; STATE -
+your logins, downloads, ledger, exports - lives in a proper home, because
+burying Chrome profiles inside a global npm directory would lose your logins
+on the next reinstall:
+
+```bash
+uibridge paths          # code, home, config, profiles, base_url
+```
+
+On Windows that home is `%LOCALAPPDATA%\uibridge`. Override it with
+`UIBRIDGE_HOME` - point it at a checkout you have already signed into and
+your existing sessions come with you. Otherwise sign in once per provider:
+
+```bash
+uibridge login gemini
+```
+
+```bash
+uibridge login chatgpt
+```
+
+Then have it start with your session, so any program can just call it:
+
+```bash
+uibridge autostart
+```
+
+`uibridge autostart --status` inspects that logon task and
+`uibridge autostart --remove` undoes it. The task runs `serve` and opens no
+browser until the first request arrives. On Linux/macOS the command prints
+the `ExecStart` line for a systemd user unit instead of guessing at your
+supervisor.
+
+### Calling it
+
+It speaks the OpenAI API on `http://127.0.0.1:8477/v1`, so anything that
+takes a base URL works unchanged. No key is needed; clients that insist on
+one accept any string:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8477/v1", api_key="local")
+r = client.chat.completions.create(
+    model="chatgpt-5.6-medium",
+    messages=[{"role": "user", "content": "Extract the sample size from this abstract: ..."}],
+)
+print(r.choices[0].message.content)
+```
+
+```bash
+curl http://127.0.0.1:8477/v1/chat/completions -H 'content-type: application/json' -d '{"model":"gemini-pro","messages":[{"role":"user","content":"hello"}]}'
+```
+
+`model` selects the provider AND its model (`uibridge models`). Provider
+specifics - which model actually answered, citations, generated files, the
+thread id to continue - come back under `_uibridge`, described below.
+
+### Nothing pops up
+
+A chat window flashing open on every call is not something a caller asked
+for. There are three window modes, and each provider's default is MEASURED,
+not assumed:
+
+| mode | what it is | who uses it |
+|---|---|---|
+| `true` | `--headless=new` | Gemini. Verified working with a signed-in profile. |
+| `"offscreen"` | a real, ordinary browser parked off the visible desktop | ChatGPT - measured 2026-09-06, it serves an ANONYMOUS session to true headless even with valid session cookies present and sent, so headless cannot be used there. Nothing appears on screen either way. |
+| `false` | a normal visible window | `uibridge login` always, and `uibridge serve --headed` when you want to watch it work. |
+
+Set `"headless"` globally or per provider in `config.json` (see
+`config.example.json`), or `UIBRIDGE_HEADED=1` for one run. Signing in always
+opens a real visible window: that is a human action, and this tool never
+sees or types your password.
+
 ## Commands
 
 ```bash

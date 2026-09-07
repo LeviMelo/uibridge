@@ -69,7 +69,21 @@ async function launch(port, userDataDir, headless) {
     '--disable-blink-features=AutomationControlled',
     'about:blank',
   ]
-  if (headless) args.unshift('--headless=new')
+  // THREE MODES, because "no window in my face" and "headless" are not the
+  // same requirement:
+  //
+  //   true        --headless=new. Cheapest, but MEASURED 2026-09-06:
+  //               chatgpt.com serves an anonymous session to it even with
+  //               valid session cookies in the profile, so a real ChatGPT
+  //               turn cannot be done this way.
+  //   'offscreen' a real, ordinary browser parked off the visible desktop.
+  //               Nothing pops up, and the site sees exactly what it sees
+  //               when a person uses it - which is the point of this whole
+  //               project.
+  //   false       a normal visible window. What `login` always uses, and
+  //               what you want when watching it work.
+  if (headless === true) args.unshift('--headless=new')
+  else if (headless === 'offscreen') args.unshift('--window-position=-32000,-32000', '--window-size=1500,1000')
 
   log.debug(`launching chrome on port ${port} (profile ${userDataDir})`)
   const child = spawn(chromePath(), args, { detached: true, stdio: 'ignore' })

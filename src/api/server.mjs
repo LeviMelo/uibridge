@@ -12,7 +12,7 @@ import { logger } from '../core/log.mjs'
 import { Session } from '../session.mjs'
 import { listThreads } from '../core/ledger.mjs'
 import { PROTOCOL_VERSION, SERVICE_ID } from '../core/protocol.mjs'
-import { ROOT } from '../core/config.mjs'
+import { HOME } from '../core/config.mjs'
 import { resolve } from 'node:path'
 import { modelCatalogue, providerIds, resolveModel } from '../providers/registry.mjs'
 import {
@@ -131,7 +131,7 @@ export function createApp(cfg = loadConfig()) {
     },
 
     'GET /v1/threads': async () => ({
-      threads: await listThreads(resolve(ROOT, cfg.ledgerDir), null),
+      threads: await listThreads(resolve(HOME, cfg.ledgerDir), null),
     }),
 
     'POST /v1/chat/completions': async (body) => {

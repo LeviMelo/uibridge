@@ -14,7 +14,7 @@
 // first question is always "which selector stopped matching?", and that
 // deserves a real tool rather than a probe rewritten each time.
 
-import { loadConfig, providerSettings, portFor, ROOT } from '../src/core/config.mjs'
+import { loadConfig, providerSettings, portFor, ROOT, HOME } from '../src/core/config.mjs'
 import { resolve } from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { createInterface } from 'node:readline/promises'
@@ -62,6 +62,8 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge chat <provider>             persistent same-tab conversation
                                       [--thread=id] [--model=id] [--jsonl]
   uibridge stop                       stop the background uibridge (restart after code changes)
+  uibridge paths [--json]             where config, profiles, downloads and logs live
+  uibridge autostart [--remove|--status]  run uibridge at logon (Windows task)
   uibridge export <provider> <id>      export a complete active thread branch
   uibridge export <provider> <id> --files  ...and download every file it generated
                                       [--output=path] [--json]
@@ -107,6 +109,7 @@ async function login(id) {
   const { ctx } = await attachBrowser({
     port: portFor(cfg, id, providerIds.indexOf(id)),
     userDataDir: settings.profileDir,
+    // ALWAYS HEADED: a human types here. Never inherit cfg.headless.
     headless: false,
     clipboardOrigins: [new URL(url).origin],
   })
@@ -186,6 +189,7 @@ async function peekSession(id, sel) {
   const { ctx } = await attachBrowser({
     port: portFor(cfg, id, providerIds.indexOf(id)),
     userDataDir: settings.profileDir,
+    // ALWAYS HEADED: a human types here. Never inherit cfg.headless.
     headless: false,
     clipboardOrigins: [new URL(sel.url).origin],
   })
@@ -285,7 +289,7 @@ async function recon(argv) {
   // ABSOLUTE. Chrome resolves a relative --user-data-dir against its own
   // working directory, not ours, and then simply never opens the debugging
   // port - which surfaces as "Chrome failed to start" with no clue why.
-  const profile = resolve(ROOT, cfg.profileDir, opts.profile ?? new URL(url).host.split('.')[0])
+  const profile = resolve(HOME, cfg.profileDir, opts.profile ?? new URL(url).host.split('.')[0])
   const port = Number(opts.port ?? 9400)
   if (phase === 'observe') await reconObserve(cfg, url, { port, profile })
   else if (phase === 'exchange') await reconExchange(cfg, url, { ...opts, port, profile })
@@ -446,7 +450,7 @@ async function exportThread(id, args) {
     const data = daemon
       ? await daemonPost(`${daemon.base}/v1/threads/export`, { provider: id, thread_id: threadId, files: wantFiles })
       : await session.exportThread(threadId, { files: wantFiles })
-    const path = resolve(requestedPath ?? resolve(ROOT, cfg.exportDir, id, `${threadId}.json`))
+    const path = resolve(requestedPath ?? resolve(HOME, cfg.exportDir, id, `${threadId}.json`))
     mkdirSync(resolve(path, '..'), { recursive: true })
     writeFileSync(path, JSON.stringify(data, null, 2), 'utf8')
     if (json) console.log(JSON.stringify({ path, ...data }, null, 2))
@@ -462,6 +466,82 @@ async function exportThread(id, args) {
 }
 
 /** Stop a running uibridge. Code changes need a restart to take effect. */
+/**
+ * Where everything lives. Asked often enough - and after a global install
+ * the answer is not "next to the code" - that guessing it is worse than
+ * printing it.
+ */
+function paths(args) {
+  const rows = {
+    code: ROOT,
+    home: HOME,
+    config: resolve(HOME, 'config.json'),
+    profiles: resolve(HOME, cfg.profileDir),
+    downloads: resolve(HOME, cfg.downloadDir),
+    ledger: resolve(HOME, cfg.ledgerDir),
+    exports: resolve(HOME, cfg.exportDir),
+    daemon_log: resolve(HOME, '.uibridge', 'daemon.log'),
+    base_url: `http://${cfg.host}:${cfg.port}/v1`,
+  }
+  if (args.includes('--json')) return console.log(JSON.stringify(rows, null, 2))
+  for (const [k, v] of Object.entries(rows)) console.log(`${k.padEnd(11)}: ${v}`)
+  console.log(`\nSet UIBRIDGE_HOME to keep state somewhere else.`)
+}
+
+/**
+ * Run uibridge at logon, so any program on this machine can just call it.
+ *
+ * A Scheduled Task rather than a Startup shortcut: it survives without a
+ * console window, restarts cleanly, and can be inspected and removed by
+ * name. The task runs `serve`, which opens no browser until the first
+ * request arrives.
+ */
+async function autostart(args) {
+  const name = 'uibridge'
+  const cmd = `"${process.execPath}" "${resolve(ROOT, 'bin', 'uibridge.mjs')}" serve`
+  const run = async (a) => {
+    const { spawn } = await import('node:child_process')
+    return new Promise((res) => {
+      const p = spawn('schtasks', a, { windowsHide: true })
+      let out = ''
+      p.stdout.on('data', (d) => (out += d))
+      p.stderr.on('data', (d) => (out += d))
+      p.on('close', (code) => res({ code, out: out.trim() }))
+    })
+  }
+
+  if (process.platform !== 'win32') {
+    console.log(
+      'Automatic start is wired for Windows only.\n' +
+        'On Linux/macOS, run this at login with your own supervisor, e.g. a systemd user unit:\n\n' +
+        `  ExecStart=${cmd}\n`
+    )
+    return
+  }
+
+  if (args.includes('--remove')) {
+    const r = await run(['/Delete', '/TN', name, '/F'])
+    console.log(r.code === 0 ? `Removed the "${name}" logon task.` : r.out)
+    return
+  }
+  if (args.includes('--status')) {
+    const r = await run(['/Query', '/TN', name])
+    console.log(r.code === 0 ? r.out : `No "${name}" logon task is installed.`)
+    return
+  }
+  // /RL LIMITED, not HIGHEST: this drives a browser as you, and asking for
+  // elevation for that would be both unnecessary and a bad habit.
+  const r = await run(['/Create', '/TN', name, '/TR', cmd, '/SC', 'ONLOGON', '/RL', 'LIMITED', '/F'])
+  if (r.code !== 0) return console.log(`Could not create the logon task:\n${r.out}`)
+  console.log(
+    `uibridge will start at logon.\n` +
+      `  task    : ${name}  (uibridge autostart --status | --remove)\n` +
+      `  runs    : ${cmd}\n` +
+      `  api     : http://${cfg.host}:${cfg.port}/v1\n` +
+      `It opens no browser until the first request arrives.`
+  )
+}
+
 async function stopDaemon() {
   // Identity first: /health is not proof of being us, and shutting down
   // whatever unrelated service happens to hold the port would be worse than
@@ -480,7 +560,7 @@ async function threads(args) {
   const json = args.includes('--json')
   const provider = args.find((a) => !a.startsWith('--')) ?? null
   if (provider) requireProviderArg(provider)
-  const rows = await listThreads(resolve(ROOT, cfg.ledgerDir), provider)
+  const rows = await listThreads(resolve(HOME, cfg.ledgerDir), provider)
   if (json) return console.log(JSON.stringify(rows, null, 2))
   if (!rows.length) return console.log('No locally recorded threads yet.')
   for (const row of rows) console.log(`${row.provider}\t${row.thread_id}\t${row.turns} turn(s)\t${row.updated_at}`)
@@ -491,7 +571,7 @@ function thread(args) {
   const positional = args.filter((a) => !a.startsWith('--'))
   const threadId = positional[1]
   if (!threadId) usage(1)
-  const record = readThreadEvents(resolve(ROOT, cfg.ledgerDir), provider, threadId)
+  const record = readThreadEvents(resolve(HOME, cfg.ledgerDir), provider, threadId)
   if (args.includes('--json')) return console.log(JSON.stringify(record, null, 2))
   if (!record.events.length) return console.log(`No local ledger for ${provider} thread ${threadId}.`)
   console.log(`${provider} thread ${threadId}\n${record.path}`)
@@ -509,6 +589,7 @@ async function logout(id) {
   const { ctx } = await attachBrowser({
     port: portFor(cfg, id, providerIds.indexOf(id)),
     userDataDir: settings.profileDir,
+    // ALWAYS HEADED: a human types here. Never inherit cfg.headless.
     headless: false,
   })
   const origin = new URL(Class.selectors.url).origin
@@ -554,7 +635,13 @@ async function status(only, json = false) {
 }
 
 try {
-  if (cmd === 'serve' || cmd === undefined) await serve(cfg)
+  if (cmd === 'serve' || cmd === undefined) {
+    // Headless is the default because this is a background service. --headed
+    // is for watching it work, which is the only way some UI bugs are ever
+    // found.
+    const headed = rest.includes('--headed') || rest.includes('--no-headless')
+    await serve({ ...cfg, headless: headed ? false : rest.includes('--headless') ? true : cfg.headless })
+  }
   else if (cmd === 'login') await login(requireProviderArg(rest[0]))
   else if (cmd === 'logout') await logout(requireProviderArg(rest[0]))
   else if (cmd === 'status') {
@@ -579,6 +666,8 @@ try {
   else if (cmd === 'ask') await ask(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'chat') await chat(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'stop') await stopDaemon()
+  else if (cmd === 'paths') paths(rest)
+  else if (cmd === 'autostart') await autostart(rest)
   else if (cmd === 'export') await exportThread(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'capture') {
     const continueConversation = rest.includes('--continue')

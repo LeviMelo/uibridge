@@ -11,10 +11,36 @@
 
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { RequestError } from './errors.mjs'
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+/**
+ * Where uibridge keeps STATE: config.json, the Chrome profiles that hold
+ * your logins, downloads, the thread ledger, exports, the daemon log.
+ *
+ * ROOT is where the CODE lives, and once this is installed globally the two
+ * must not be the same: `npm i -g` puts the code under npm's own directory,
+ * so writing profiles there would bury your logins somewhere invisible and
+ * lose them on the next reinstall.
+ *
+ *   UIBRIDGE_HOME           wins, if set
+ *   <checkout>/config.json  exists -> the checkout itself, so development
+ *                           and an existing copy behave exactly as before
+ *   otherwise               %LOCALAPPDATA%/uibridge (Windows) or
+ *                           ~/.local/share/uibridge
+ */
+export const HOME = (() => {
+  if (process.env.UIBRIDGE_HOME) return resolve(process.env.UIBRIDGE_HOME)
+  if (existsSync(resolve(ROOT, 'config.json'))) return ROOT
+  const base =
+    process.platform === 'win32'
+      ? process.env.LOCALAPPDATA ?? resolve(homedir(), 'AppData', 'Local')
+      : process.env.XDG_DATA_HOME ?? resolve(homedir(), '.local', 'share')
+  return resolve(base, 'uibridge')
+})()
 
 const DEFAULTS = {
   port: 8477,
@@ -23,7 +49,18 @@ const DEFAULTS = {
   downloadDir: 'downloads',
   ledgerDir: '.uibridge/threads',
   exportDir: '.uibridge/exports',
-  headless: false,
+  // HEADLESS BY DEFAULT. This runs as a background service for other
+  // programs on the machine; a chat window flashing open on every call is
+  // not something a caller asked for. Signing in is the exception - that is
+  // a human action and always opens a real window. Override per run with
+  // `uibridge serve --headed`, or permanently with "headless": false here.
+  // Window mode: true (--headless=new), 'offscreen' (a real browser parked
+  // off the visible desktop - nothing pops up, and the site sees a normal
+  // browser) or false (a visible window). Signing in always opens a real
+  // visible window regardless: that is a human action.
+  // MEASURED: ChatGPT serves an anonymous session to true headless even with
+  // valid cookies, so its own provider block pins 'offscreen'.
+  headless: process.env.UIBRIDGE_HEADED ? false : 'offscreen',
   defaultProvider: 'gemini',
   // One debugging port per provider, derived from this base, so restarts
   // reattach to the browser that is already running.
@@ -83,7 +120,7 @@ function merge(base, over) {
 }
 
 /** Load config.json if present, merged over defaults. */
-export function loadConfig(path = resolve(ROOT, 'config.json')) {
+export function loadConfig(path = resolve(HOME, 'config.json')) {
   const file = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
   const cfg = merge(DEFAULTS, file)
   cfg.providers = cfg.providers ?? {}
@@ -93,9 +130,13 @@ export function loadConfig(path = resolve(ROOT, 'config.json')) {
 /** Effective settings for one provider: defaults, then per-provider overrides. */
 export function providerSettings(cfg, id, providerDefaults = {}) {
   const s = merge(merge(cfg.provider, providerDefaults), cfg.providers[id] ?? {})
-  s.downloadDir = resolve(ROOT, s.downloadDir ?? cfg.downloadDir)
-  s.profileDir = resolve(ROOT, cfg.profileDir, id)
-  s.ledgerDir = resolve(ROOT, cfg.ledgerDir)
+  // Window mode can differ per provider: measured, Gemini works in true
+  // headless and ChatGPT does not, and forcing both to the weaker setting
+  // would cost a window nobody asked for.
+  s.headless = s.headless ?? cfg.headless
+  s.downloadDir = resolve(HOME, s.downloadDir ?? cfg.downloadDir)
+  s.profileDir = resolve(HOME, cfg.profileDir, id)
+  s.ledgerDir = resolve(HOME, cfg.ledgerDir)
   return s
 }
 
