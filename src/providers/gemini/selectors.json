@@ -31,7 +31,10 @@
   "_copyButton": [
     "Returns Gemini's ORIGINAL MARKDOWN - pipe tables, intact LaTeX, fenced",
     "code. innerText returns none of that. message-actions holds exactly",
-    "['Good response','Bad response','Copy','Show more options']."
+    "['Good response','Bad response','Redo','Copy','Show more options'] -",
+    "re-measured 2026-09-09 on the live page. 'Redo' was NOT in this list when",
+    "the note was first written; the selector was unaffected, but it is why a",
+    "note is re-read against the page rather than trusted. See docs/UI-RECON.md."
   ],
   "newChatButton": "button[aria-label*='New chat' i], button[aria-label*='Nova conversa' i], a[aria-label*='New chat' i]",
   "thread": {
@@ -48,7 +51,19 @@
       "pairId": "next",
       "textNode": ".query-text, message-content",
       "textExclude": ".cdk-visually-hidden, .screen-reader-user-query-label",
-      "attachmentNode": ".file-preview-container [aria-label], uploader-file-preview"
+      "attachmentNode": ".file-preview-container [aria-label], uploader-file-preview",
+      "fileControl": "generated-file [data-test-id='file-name']",
+      "_fileControl": [
+        "MEASURED 2026-09-09 by reopening a thread that had generated a CSV.",
+        "Without this the export reported file_controls: [] for every message,",
+        "so `export --files` had nothing to retrieve and answered",
+        "files_skipped - even though the same file downloads fine at the time",
+        "the answer arrives. Scored on the live page: 1 hit on the assistant",
+        "turn that produced the file, 0 on the user turn.",
+        "Gemini needs the two-step viewer flow (open -> download -> close) in",
+        "generatedFile, not a single control button, which is why",
+        "downloadThreadFiles has a branch for it."
+      ]
     },
     "_export": [
       "MEASURED 2026-09-06 on a live thread. Gemini has no data-message-id: a",
@@ -212,21 +227,49 @@
   "_attachStrategy": "Synthetic DragEvents are ignored and there is no input[type=file]; CDP dispatches a trusted drag that takes file paths.",
   "pickerStrategy": "combined",
   "_pickerStrategy": "One control carries model AND extended thinking; its aria-label is the only readable state for either.",
-  "errorText": "Sorry, something went wrong|Something went wrong|Algo deu errado|Ocorreu um erro|try your request again|^I'm having a hard time fulfilling your request\\.",
+  "errorText": "Sorry, something went wrong|Something went wrong|Algo deu errado|Ocorreu um erro|try your request again|^I'm having a hard time fulfilling your request\\.|I encountered an error doing what you asked|Encontrei um erro ao (fazer|realizar) o que voc[êe] pediu",
   "_errorText": [
     "Gemini renders its OWN failures as an ordinary assistant message, e.g.",
     "'Sorry, something went wrong. Please try your request again.' Extraction",
     "happily returns that as the model's answer - 59 chars, markdown=true,",
     "indistinguishable from a real reply. In a batch that silently poisons rows.",
-    "Matching it turns the failure into a retryable error instead."
+    "Matching it turns the failure into a retryable error instead.",
+    "MEASURED 2026-09-08: within four minutes the same account received BOTH",
+    "'Sorry, something went wrong. Please try your request again.' and",
+    "'I encountered an error doing what you asked. Could you try again?'.",
+    "Only the first was matched, so the second reached the caller as a normal",
+    "200 answer - an apology recorded as evidence.",
+    "The rendered HTML of both failures was captured and compared with",
+    "successful answers: there is NO structural marker. An errored turn is an",
+    "ordinary model-response with an ordinary <p>. regenerate-button appears on",
+    "the newest successful answer too, so it means 'latest turn', not 'failed'.",
+    "Text is the only signal this UI gives. Anything not listed here that opens",
+    "like a failure is reported as provider_error_suspected instead of guessed."
   ],
   "notices": [
     {
       "name": "overlay",
       "kind": "unknown",
-      "dialog": ".cdk-overlay-container [role='dialog'], .cdk-overlay-container [role='alertdialog'], mat-dialog-container, .mat-mdc-snack-bar-container, snack-bar-container, [role='alertdialog']",
+      "dialog": ".cdk-overlay-container [role='dialog'], .cdk-overlay-container [role='alertdialog'], mat-dialog-container, [role='alertdialog']",
       "dismiss": "button",
       "dismissText": "^\\s*(OK|Ok|Entendi|Entendido|Fechar|Dispensar|Descartar|Close|Got it|Dismiss)\\s*$",
+      "classify": [
+        {
+          "kind": "rate_limit",
+          "match": "excesso|limite de|too many|rate limit|slow down|tente novamente mais tarde|try again later"
+        },
+        {
+          "kind": "capacity",
+          "match": "sobrecarregad|overloaded|indispon|unavailable|no momento"
+        }
+      ]
+    },
+    {
+      "name": "snackbar",
+      "kind": "unknown",
+      "dialog": ".mat-mdc-snack-bar-container, mat-snack-bar-container, snack-bar-container",
+      "reportUnknown": false,
+      "escape": false,
       "classify": [
         {
           "kind": "rate_limit",
@@ -261,6 +304,21 @@
     "logs the full text it saw - then add a `match` and a measured kind here.",
     "dismissText is anchored but tolerates surrounding whitespace: a button's",
     "innerText carries padding, and a strictly anchored ^...$ matched nothing",
-    "- measured, the close button was found and then never clicked."
+    "- measured, the close button was found and then never clicked.",
+    "",
+    "SPLIT 2026-09-08, MEASURED. Clicking the Copy button - which this provider",
+    "does on every turn to obtain the original markdown - raises",
+    "<mat-snack-bar-container class='mdc-snackbar mat-mdc-snack-bar-container",
+    "custom-snackbar ...'> reading 'Copied to clipboard', with no buttons, and",
+    "it is gone again inside 4s. Held in one structural spec with the dialogs,",
+    "that toast was reported to callers as a blocking notice of unknown kind,",
+    "drew an Escape keypress aimed at the page, and cost up to 5s per turn",
+    "waiting for it to close.",
+    "",
+    "So the two are now separate contracts. A DIALOG blocks, so an unrecognised",
+    "one is still reported as kind 'unknown' - that is the honest signal. A",
+    "SNACKBAR does not block, so it is reported only when `classify` recognises",
+    "its wording (a rate limit or capacity message shown there is still worth",
+    "knowing about), and it is never chased with Escape."
   ]
 }

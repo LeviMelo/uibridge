@@ -19,7 +19,7 @@ import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
 import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse-openai.mjs'
 import { WireTap } from '../src/transports/wire.mjs'
 import { Pacer } from '../src/core/async.mjs'
-import { mergeReading, orderedMessages, contentKey, stitchRun, readingAgrees } from '../src/transports/thread-dom.mjs'
+import { mergeReading, orderedMessages, contentKey, stitchRun, readingAgrees, sweepThread } from '../src/transports/thread-dom.mjs'
 import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -1154,4 +1154,398 @@ test('gemini ships a structural notice spec with no invented wording', async () 
   assert.ok(new RegExp(spec.dismissText, 'i').test(' Entendi '), 'a real button label carries whitespace')
   assert.equal(new RegExp(spec.dismissText, 'i').test('Excluir'), false, 'a destructive label must never match')
   assert.ok(spec.classify.length > 0)
+})
+
+// --- answer integrity: an apology is not evidence ---------------------------
+
+import { classifyAnswer, errorPatterns, SUSPECT_OPENINGS } from '../src/core/answer-integrity.mjs'
+
+test('a measured provider error notice is a verdict', () => {
+  const patterns = ['Sorry, something went wrong|try your request again']
+  const v = classifyAnswer('Sorry, something went wrong. Please try your request again.', { patterns })
+  assert.equal(v.error, true)
+  assert.equal(v.suspected, false)
+})
+
+test('the variant that shipped as data is now recognised by the real selectors', async () => {
+  // 2026-09-08: this exact text was returned to a caller as a 200 answer.
+  const { readFileSync } = await import('node:fs')
+  const sel = JSON.parse(readFileSync(new URL('../src/providers/gemini/selectors.json', import.meta.url), 'utf8'))
+  const v = classifyAnswer('I encountered an error doing what you asked. Could you try again?', {
+    patterns: errorPatterns(sel, {}),
+  })
+  assert.equal(v.error, true)
+})
+
+test('an unknown failure opening is suspected, never silently accepted', () => {
+  const v = classifyAnswer('Oops, that did not work. Please retry.', { patterns: ['no match here'] })
+  assert.equal(v.error, false)
+  assert.equal(v.suspected, true)
+  assert.ok(v.suspected_by)
+})
+
+test('domain prose containing the word error is not suspected', () => {
+  // "The standard error was 1.2" must stay evidence, which is why the
+  // suspicion patterns are anchored to the start of the answer.
+  for (const text of [
+    'The standard error was 1.2 (95% CI 0.9-1.5).',
+    'Type I error rates are reported in Table 2.',
+    'The trial reported no serious adverse events; sorry is not a word used here.',
+  ]) {
+    assert.equal(classifyAnswer(text, { patterns: [] }).suspected, false, text)
+  }
+})
+
+test('a long answer that merely apologises somewhere is an answer', () => {
+  const long = 'Sorry, I should clarify. ' + 'The pooled estimate is 0.82. '.repeat(40)
+  assert.equal(classifyAnswer(long, { patterns: ['Sorry'] }).error, false)
+  assert.equal(classifyAnswer(long, { patterns: ['Sorry'] }).suspected, false)
+})
+
+test('operators can add wording without editing source', () => {
+  const patterns = errorPatterns({ errorText: 'built in' }, { errorTextExtra: ['a brand new failure'] })
+  assert.deepEqual(patterns, ['built in', 'a brand new failure'])
+  assert.equal(classifyAnswer('A brand new failure occurred.', { patterns }).error, true)
+})
+
+test('every suspicion pattern is anchored to the start of the text', () => {
+  for (const re of SUSPECT_OPENINGS) assert.ok(re.source.startsWith('^'), re.source)
+})
+
+// --- wire: bytes that arrived before anyone asked ---------------------------
+
+test('a standing collector hands out each captured body exactly once', async () => {
+  // The failure this prevents: ChatGPT pre-fetches a generated artifact while
+  // the conversation loads, so the click that "should" fetch it issues no
+  // request at all and the file was reported as unretrievable.
+  const { WireTap } = await import('../src/transports/wire.mjs')
+  const tap = new WireTap(null)
+  const cap = tap.collect(/estuary\/content/)
+  const feed = (id, body) => {
+    const rec = { id, url: `https://x/backend-api/estuary/content?id=${id}`, chunks: [Buffer.from(body)], headers: {}, status: 200, done: true, watchers: [cap] }
+    cap.onRequest(rec); cap.onFinish()
+  }
+  assert.equal(cap.available(), 0)
+  feed('a', 'first,file'); feed('b', 'second,file')
+  assert.equal(cap.available(), 2)
+  assert.equal(cap.take().body, 'first,file')
+  assert.equal(cap.take().body, 'second,file')
+  assert.equal(cap.take(), null, 'a third caller must not receive another file\'s bytes')
+})
+
+test('a standing collector hands out the file that was asked for, not the first one', async () => {
+  // MEASURED REGRESSION 2026-09-08. Re-running `export --files` on a warm tab
+  // returned the user's own uploaded `_input.csv` in place of the requested
+  // `audit_totals.csv`: same endpoint, older body, blind FIFO take. It was
+  // reported as a success, which is the dangerous part.
+  const { WireTap } = await import('../src/transports/wire.mjs')
+  const tap = new WireTap(null)
+  const cap = tap.collect(/estuary\/content/)
+  const feed = (name, body) => {
+    const rec = {
+      url: 'https://x/backend-api/estuary/content?id=' + name,
+      chunks: [Buffer.from(body)],
+      headers: { 'content-disposition': `attachment; filename="${name}"` },
+      status: 200, done: true,
+    }
+    cap.onRequest(rec); cap.onFinish()
+  }
+  feed('_input.csv', 'the,upload')
+  feed('audit_totals.csv', 'the,answer')
+  const wants = (n) => (rec) => /filename="([^"]+)"/.exec(rec.headers['content-disposition'])?.[1] === n
+  assert.equal(cap.available(wants('audit_totals.csv')), 1)
+  assert.equal(cap.take(wants('audit_totals.csv')).body, 'the,answer')
+  assert.equal(cap.take(wants('audit_totals.csv')), null, 'the same body must not be handed out twice')
+  assert.equal(cap.take(wants('_input.csv')).body, 'the,upload')
+})
+
+test('a standing collector does not grow without bound', async () => {
+  // Its tab lives as long as the daemon; file bodies are megabytes.
+  const { WireTap } = await import('../src/transports/wire.mjs')
+  const cap = new WireTap(null).collect(/estuary\/content/, { keep: 3 })
+  for (let i = 0; i < 10; i++) {
+    cap.onRequest({ url: `https://x/estuary/content?i=${i}`, chunks: [Buffer.alloc(8)], headers: {}, status: 200, done: true })
+    cap.onFinish()
+  }
+  assert.equal(cap.available(), 3)
+  assert.deepEqual(cap.completed().map((r) => new URL(r.url).searchParams.get('i')), ['7', '8', '9'], 'the newest bodies are the ones kept')
+})
+
+test('captureDownload ignores standing bytes that are not the requested file', async () => {
+  const { captureDownload } = await import('../src/transports/files-wire.mjs')
+  const { mkdtempSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'uib-files-'))
+  const body = (name, text) => ({
+    ok: true, status: 200, buffer: Buffer.from(text), body: text,
+    headers: { 'content-disposition': `attachment; filename="${name}"` },
+  })
+  const held = [body('_input.csv', 'the,upload')]
+  const standing = {
+    take: (w) => { const i = held.findIndex((r) => !w || w(r)); return i === -1 ? null : held.splice(i, 1)[0] },
+    available: (w) => held.filter((r) => !w || w(r)).length,
+  }
+  // The click is what makes the wanted file appear on the wire.
+  let clicks = 0
+  const tap = { expect: () => ({
+    request: async () => { held.push(body('audit_totals.csv', 'the,answer')); return {} },
+    finished: async () => held.find((r) => /audit_totals/.test(r.headers['content-disposition'])),
+    stop() {},
+  }) }
+  const out = await captureDownload(tap, async () => { clicks++ }, {
+    contentPattern: /estuary/, dir, fallbackName: 'audit_totals.csv', standing,
+  })
+  assert.equal(clicks, 1, 'the wrong body must not short-circuit the click')
+  assert.equal(readFileSync(out.path, 'utf8'), 'the,answer')
+  assert.equal(out.name, 'audit_totals.csv')
+})
+
+// --- errors: a network fault is not a bug in uibridge ------------------------
+
+test('Chrome network failures are typed, not reported as internal errors', async () => {
+  // MEASURED 2026-09-08 with a real browser: Playwright raises these as a
+  // plain Error whose name is "Error", so nothing downstream could tell them
+  // apart from a defect in this codebase. They became HTTP 500 "internal".
+  const { classifyBrowserError, BridgeError } = await import('../src/core/errors.mjs')
+  const of = (m, name) => { const e = new Error(m); if (name) e.name = name; return classifyBrowserError(e) }
+
+  const dns = of('page.goto: net::ERR_NAME_NOT_RESOLVED at https://gemini.google.com/app')
+  assert.equal(dns.code, 'network')
+  assert.equal(dns.retryable, true, 'the wifi coming back is a plausible fix')
+  assert.match(dns.message, /could not reach the site/)
+
+  assert.equal(of('net::ERR_CONNECTION_CLOSED at https://chatgpt.com').code, 'network')
+  assert.equal(of('page.goto: Target page, context or browser has been closed').code, 'browser_gone')
+
+  const blocked = of('page.goto: net::ERR_CERT_AUTHORITY_INVALID at https://x/')
+  assert.equal(blocked.code, 'network_blocked')
+  assert.equal(blocked.retryable, false, 'a proxy or certificate policy will not fix itself')
+
+  assert.equal(of('locator.click: Timeout 800ms exceeded.', 'TimeoutError').status, 504)
+
+  // The important negative: an actual bug must not be dressed up as weather.
+  assert.equal(of('TypeError: cannot read properties of undefined'), null)
+  // And an already-typed error passes through unchanged.
+  const mine = new BridgeError('mine', { status: 418, code: 'teapot' })
+  assert.equal(classifyBrowserError(mine), mine)
+})
+
+test('a daemon serving a different state directory is refused, not used', async () => {
+  // MEASURED 2026-09-08: a command run with UIBRIDGE_HOME pointing at a test
+  // configuration was answered by the daemon already holding the port, using
+  // its own config, logins and ledger. Nothing in the output said so.
+  const { daemonHealth } = await import('../src/core/client.mjs')
+  const { HOME } = await import('../src/core/config.mjs')
+  const { SERVICE_ID, PROTOCOL_VERSION } = await import('../src/core/protocol.mjs')
+  const { createServer } = await import('node:http')
+  const payload = (home) => JSON.stringify({ service: SERVICE_ID, protocol: PROTOCOL_VERSION, status: 'ok', home, providers: [], sessions: {} })
+
+  let home = join(HOME, 'somewhere-else')
+  const server = createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end(payload(home)) })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const cfg = { host: '127.0.0.1', port: server.address().port }
+  try {
+    await assert.rejects(() => daemonHealth(cfg), (e) => e.code === 'daemon_other_home' && /different state directory/.test(e.message))
+    home = HOME
+    const ok = await daemonHealth(cfg)
+    assert.equal(ok.status, 'ok', 'the same directory is served normally')
+  } finally {
+    server.close()
+  }
+})
+
+test('a transient toast is not reported as a blocking notice', async () => {
+  // MEASURED 2026-09-08: clicking Gemini's Copy button - done on every turn,
+  // because that is how the original markdown is obtained - raises
+  // <mat-snack-bar-container> "Copied to clipboard" and it is gone in 4s.
+  // One structural spec matched it alongside real dialogs.
+  const { providerClass } = await import('../src/providers/registry.mjs')
+  const { classifyNotice } = await import('../src/providers/dom-provider.mjs')
+  const specs = providerClass('gemini').selectors.notices
+  const snackbar = specs.find((s) => s.name === 'snackbar')
+  const dialog = specs.find((s) => s.name === 'overlay')
+
+  assert.ok(snackbar && dialog, 'the two contracts are separate')
+  assert.equal(snackbar.reportUnknown, false, 'an unrecognised toast is not a notice')
+  assert.equal(snackbar.escape, false, 'and must not draw an Escape keypress at the page')
+  assert.notEqual(dialog.reportUnknown, false, 'an unrecognised DIALOG blocks, so it is still reported')
+  assert.ok(!/snack/i.test(dialog.dialog), 'the dialog contract no longer matches snackbars')
+
+  assert.equal(classifyNotice(snackbar, 'Copied to clipboard'), 'unknown')
+  // But a real problem announced in a snackbar still gets through.
+  assert.equal(classifyNotice(snackbar, 'You have sent too many requests. Try again later.'), 'rate_limit')
+})
+
+// --- configuration ----------------------------------------------------------
+
+test('config.example.json documents every setting, at its real default', async () => {
+  // Documentation drift is the failure mode here: a settings file that lists
+  // a value the code no longer uses is worse than no example at all.
+  const { loadConfig, validateConfig, ROOT } = await import('../src/core/config.mjs')
+  const { providerClass, providerIds } = await import('../src/providers/registry.mjs')
+  const example = JSON.parse(readFileSync(join(ROOT, 'config.example.json'), 'utf8'))
+  const real = loadConfig(join(ROOT, 'no-such-config.json'))
+
+  validateConfig(example, 'config.example.json')
+
+  const missing = Object.keys(real).filter((k) => k !== 'windowModeOverride' && !(k in example))
+  assert.deepEqual(missing, [], 'every top-level setting is listed')
+  const missingShared = Object.keys(real.provider).filter((k) => !(k in example.provider))
+  assert.deepEqual(missingShared, [], 'every shared provider setting is listed')
+
+  const wrong = []
+  for (const [k, v] of Object.entries(example)) {
+    if (k.startsWith('_') || k === 'provider' || k === 'providers') continue
+    if (JSON.stringify(v) !== JSON.stringify(real[k])) wrong.push(`${k}: documented ${JSON.stringify(v)}, actual ${JSON.stringify(real[k])}`)
+  }
+  for (const [k, v] of Object.entries(example.provider)) {
+    if (k.startsWith('_')) continue
+    if (JSON.stringify(v) !== JSON.stringify(real.provider[k])) wrong.push(`provider.${k}: documented ${JSON.stringify(v)}, actual ${JSON.stringify(real.provider[k])}`)
+  }
+  // The per-provider blocks must match that provider's own class defaults.
+  for (const id of providerIds) {
+    const defaults = providerClass(id).defaults
+    for (const [k, v] of Object.entries(example.providers[id] ?? {})) {
+      if (k.startsWith('_')) continue
+      const actual = defaults[k] ?? real.provider[k] ?? real[k]
+      if (JSON.stringify(v) !== JSON.stringify(actual)) wrong.push(`providers.${id}.${k}: documented ${JSON.stringify(v)}, actual ${JSON.stringify(actual)}`)
+    }
+  }
+  assert.deepEqual(wrong, [], 'documented defaults match the code')
+})
+
+test('a misspelled setting is refused instead of ignored', async () => {
+  const { validateConfig } = await import('../src/core/config.mjs')
+  assert.throws(() => validateConfig({ headles: false }), /headles.*did you mean "headless"/)
+  assert.throws(() => validateConfig({ provider: { responseTimeout: 1 } }), /responseTimeout/)
+  assert.throws(() => validateConfig({ providers: { gemini: { conccurency: 4 } } }), /providers\.gemini\.conccurency/)
+  // Notes are allowed, at every level, including as a provider entry.
+  validateConfig({ _why: 'x', provider: { _note: 'y' }, providers: { _: ['a'], gemini: { _n: 1, headless: true } } })
+})
+
+test('every error code this build can raise is documented', async () => {
+  // The catalogue in the README is a contract with callers who branch on
+  // `type`. An undocumented code is one a pipeline cannot handle.
+  const { readdirSync, statSync } = await import('node:fs')
+  const { ROOT } = await import('../src/core/config.mjs')
+  const files = []
+  const walk = (d) => { for (const e of readdirSync(d)) { const p = join(d, e); statSync(p).isDirectory() ? walk(p) : p.endsWith('.mjs') && files.push(p) } }
+  walk(join(ROOT, 'src')); walk(join(ROOT, 'bin'))
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
+  const undocumented = new Set()
+  for (const f of files) {
+    for (const m of readFileSync(f, 'utf8').matchAll(/code[:=]\s*'([a-z_]{4,})'/g)) {
+      if (!readme.includes('`' + m[1] + '`')) undocumented.add(m[1])
+    }
+  }
+  assert.deepEqual([...undocumented].sort(), [], 'add these to the Errors table in README.md')
+})
+
+// --- provider drift: the app that never started -----------------------------
+
+test('an un-hydrated page is diagnosed from its fallback control', async () => {
+  // MEASURED 2026-09-09: ChatGPT served textarea[name=prompt-textarea] - its
+  // no-JS fallback - visible and typable, while the real editor never
+  // mounted and the send button stayed disabled. uibridge reported a 30s
+  // selector timeout, which named neither the cause nor the cure.
+  const { providerClass } = await import('../src/providers/registry.mjs')
+  const sel = providerClass('chatgpt').selectors
+  assert.ok(sel.unhydratedComposer, 'the fallback control is part of the measured contract')
+  assert.notEqual(sel.unhydratedComposer, sel.composer, 'and is NOT the composer we drive')
+  // The two must be mutually exclusive as a diagnosis: fallback present and
+  // composer absent means the application is not running.
+  assert.match(sel.composer, /contenteditable/, 'the real composer is the rich editor')
+  assert.match(sel.unhydratedComposer, /textarea/, 'the fallback is the plain form control')
+})
+
+test('every provider path follows cfg.home, not the process-wide one', async () => {
+  // A server given `cfg.home` resolves its ledger reads, its idempotency store
+  // and the identity it publishes on /health against that directory. These
+  // three took the process-global HOME instead. Measured 2026-09-09: such a
+  // server answered a completion, wrote the ledger into the OTHER directory,
+  // then returned 404 thread_unknown for the thread it had just created.
+  // profileDir is the one that matters most - a split there is a different
+  // Chrome profile, which is a different logged-in account.
+  const { loadConfig, providerSettings, HOME } = await import('../src/core/config.mjs')
+  const elsewhere = mkdtempSync(join(tmpdir(), 'uibridge-otherhome-'))
+  const cfg = { ...loadConfig(), home: elsewhere }
+  const s = providerSettings(cfg, 'gemini')
+
+  for (const key of ['downloadDir', 'profileDir', 'ledgerDir']) {
+    assert.ok(s[key].startsWith(elsewhere), `${key} follows cfg.home (got ${s[key]})`)
+    assert.ok(!s[key].startsWith(HOME), `${key} does not fall back to the process HOME`)
+  }
+  const fallback = providerSettings(loadConfig(), 'gemini')
+  assert.ok(fallback.profileDir.startsWith(HOME), 'without cfg.home the process HOME is still used')
+})
+
+
+// A THREAD THAT NEVER SHOWED ITS BEGINNING MUST NOT BE CALLED COMPLETE.
+//
+// Measured 2026-09-09: a reloaded six-message ChatGPT thread mounted
+// conversation-turn-2..6 and never mounted turn 1, while having only 123px of
+// scroll overflow - so the walk genuinely reached both ends and the export
+// would have claimed to be the whole thread. The provider's own turn numbers
+// are the only evidence that catches it.
+//
+// The page is faked deliberately: what is under test is sweepThread's
+// ACCOUNTING, not the DOM reading, and a fake keeps the case exact.
+const sweepRow = (id, ordinal, role, text) => ({
+  id, ordinal, role, text,
+  branch: null, model_slug: null,
+  links: [], media: [], fileControls: [], attachments: [],
+})
+// One screenful, nothing to scroll: reached_top and reached_bottom both hold.
+const stillPage = (rows) => ({
+  evaluate: async () => ({ rows, scroll: { top: 0, max: 0, height: 600, viewport: 600 }, mounted: rows.length }),
+})
+const sweepOf = (rows) =>
+  sweepThread(stillPage(rows), { messageNode: 'x', idAttr: 'id' }, { settleMs: 1 })
+
+test('a thread numbered from 1 with no gaps is complete', async () => {
+  const r = await sweepOf([
+    sweepRow('a', 1, 'user', 'one'),
+    sweepRow('b', 2, 'assistant', 'two'),
+    sweepRow('c', 3, 'user', 'three'),
+  ])
+  assert.equal(r.evidence.reached_top, true)
+  assert.equal(r.evidence.reached_bottom, true)
+  assert.equal(r.evidence.first_turn, 1)
+  assert.equal(r.evidence.turn_gaps, 0)
+  assert.equal(r.complete, true)
+})
+
+test('a thread whose first turn never mounted is NOT complete, however well it scrolled', async () => {
+  const r = await sweepOf([
+    sweepRow('b', 2, 'assistant', 'ALPHA'),
+    sweepRow('c', 3, 'user', 'with annex'),
+    sweepRow('d', 4, 'assistant', 'BETA'),
+  ])
+  // The scroll evidence is honest and useless here: both ends were reached.
+  assert.equal(r.evidence.reached_top, true)
+  assert.equal(r.evidence.reached_bottom, true)
+  assert.equal(r.messages.length, 3)
+  assert.equal(r.evidence.first_turn, 2)
+  assert.equal(r.complete, false, 'an export missing turn 1 must not describe itself as the whole thread')
+})
+
+test('a hole in the middle of the numbering is not complete either', async () => {
+  const r = await sweepOf([
+    sweepRow('a', 1, 'user', 'one'),
+    sweepRow('c', 4, 'assistant', 'four'),
+  ])
+  assert.equal(r.evidence.first_turn, 1)
+  assert.equal(r.evidence.turn_gaps, 2)
+  assert.equal(r.complete, false)
+})
+
+test('a provider that publishes no turn numbers is judged on scroll evidence alone', async () => {
+  const r = await sweepOf([
+    sweepRow('a', null, 'user', 'one'),
+    sweepRow('b', null, 'assistant', 'two'),
+  ])
+  // null, not 1: "we could not ask" is not the same as "it starts at the top".
+  assert.equal(r.evidence.first_turn, null)
+  assert.equal(r.evidence.turn_gaps, null)
+  assert.equal(r.complete, true)
 })

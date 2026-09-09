@@ -62,7 +62,34 @@
       "idAttr": "data-message-id",
       "roleAttr": "data-message-author-role",
       "modelAttr": "data-message-model-slug",
-      "attachmentNode": "div.overflow-hidden > div.truncate.font-semibold"
+      "ordinalNode": "[data-testid^=\"conversation-turn-\"]",
+      "ordinalAttr": "data-testid",
+      "ordinalPattern": "conversation-turn-(\\d+)",
+      "_ordinalNode": [
+        "MEASURED 2026-09-09 by reloading a six-message thread and sampling the",
+        "DOM every 150ms. At 10.4s it mounted conversation-turn-2 .. -6 and NEVER",
+        "mounted turn 1 - not in 20s of sampling, and not after scrolling every",
+        "scrollable ancestor to the top. The thread had 123px of scroll overflow,",
+        "so reached_top and reached_bottom were both legitimately TRUE and the",
+        "export would have claimed complete while missing the user's opening",
+        "message. ChatGPT numbers every turn in data-testid; that number is the",
+        "only evidence that says whether the DOM ever showed the start of the",
+        "thread. Numbering is per MESSAGE, not per pair: 6 messages = turns 1-6."
+      ],
+      "attachmentNode": "div.overflow-hidden .truncate.font-semibold",
+      "_attachmentNode": [
+        "MEASURED 2026-09-09 against a real turn carrying a CSV. The previous",
+        "selector was a DIRECT-CHILD div selector and matched nothing, so every",
+        "exported ChatGPT thread silently reported zero attachments on turns",
+        "that had them - an audit record that omits the annex it was sent.",
+        "The file card is div.border-token-border-default...overflow-hidden, and",
+        "the name lives in a SPAN: span.grow.items-center.truncate.font-semibold",
+        ".capitalize. Descendant, not child; span, not div. Scored on the live",
+        "page: 2 hits on user turns, 0 on assistant turns.",
+        "NOTE the label is the SITE'S rendered name - ChatGPT drops the",
+        "extension and title-cases it (probe_annex_123.csv -> Probe Annex 123),",
+        "which is why export labels do not match the uploaded filename."
+      ]
     },
     "_export": [
       "MEASURED 2026-09-06 on a live thread: every message renders as a node",
@@ -144,7 +171,8 @@
     "scheme": "sandbox",
     "control": "button.behavior-btn",
     "metadataPattern": "/interpreter/download",
-    "contentPattern": "/backend-api/estuary/content"
+    "contentPattern": "/backend-api/estuary/content",
+    "previewPanel": "[data-testid=\"artifact-preview-surface-shell\"], [data-testid=\"stage-thread-flyout\"]"
   },
   "transientText": [
     "Pesquisando",
@@ -229,6 +257,19 @@
     "One Escape steps back a panel; a second closes the popover. The header",
     "has no model-switcher button on this build."
   ],
+  "_previewPanel": [
+    "MEASURED 2026-09-08 by diffing every data-testid in the page before and",
+    "after a real click on button.behavior-btn. The click opens an artifact",
+    "viewer whose root is [data-testid=artifact-preview-surface-shell], inside",
+    "the generic [data-testid=stage-thread-flyout]; for a CSV the body is a",
+    "spreadsheet editor (a swarm of popcorn-* testids). Both are absent before",
+    "the click and present after, which is what makes them usable as evidence",
+    "that the click LANDED.",
+    "",
+    "A class-substring guess was tried first and refuted in the same run:",
+    "[class*=artifact] already matches something on a thread page before any",
+    "click, so it would have reported 'progressed' unconditionally."
+  ],
   "_generatedFile": [
     "MEASURED 2026-09-06 on real code-interpreter turns, end to end.",
     "ChatGPT does NOT put a file behind a viewer overlay the way Gemini does.",
@@ -296,5 +337,26 @@
     "reports 'subtree intercepts pointer events' and a download click times out",
     "with no request ever sent. So it is dismissed before actuation and reported",
     "in the result; the pacer (minIntervalMs) is what keeps it from appearing."
+  ],
+  "unhydratedComposer": "textarea[name='prompt-textarea']",
+  "_unhydratedComposer": [
+    "MEASURED 2026-09-09. When the app fails to start, the page still shows a",
+    "real, visible, typable control: <textarea name='prompt-textarea'",
+    "class='wcDTda_fallbackTextarea' placeholder='Pergunte ao ChatGPT'>, the",
+    "no-JS fallback. It is NOT the composer - typing into it leaves",
+    "button[data-testid=send-button] disabled, because nothing is listening.",
+    "",
+    "Its presence WITHOUT div#prompt-textarea[contenteditable] is therefore a",
+    "precise diagnosis: the application never mounted. Compare with the old",
+    "note under _composer, which recorded this same textarea as hidden and",
+    "excluded it from the composer selector for that reason; on this build it",
+    "is visible, which is why a bare selector wait reported nothing useful.",
+    "",
+    "CAUSE: a launch race. With the browser window parked at -32000 (the",
+    "default 'offscreen' mode) Chrome sometimes composites no frame and the",
+    "editor, which mounts from a frame callback, never appears. Measured across",
+    "repeated launches: offscreen failed twice and succeeded once; a visible",
+    "launch mounted every time, and once mounted the app survives being parked,",
+    "reloaded and even minimised. See DomProvider.#recoverUnhydrated."
   ]
 }

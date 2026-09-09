@@ -31,12 +31,40 @@ export async function rawHealth(cfg, timeoutMs = 700) {
   return get(`${base(cfg)}/health`, timeoutMs).catch(() => null)
 }
 
-/** The health payload of a listening uibridge of THIS build, or null. */
+/**
+ * The health payload of a listening uibridge of THIS build, or null.
+ *
+ * ALSO CHECKS WHICH STATE DIRECTORY IT SERVES. A client is a client of
+ * whatever holds the port, and the port is the same for every HOME by
+ * default, so a command run with a different UIBRIDGE_HOME - a second
+ * account, a test config, an experiment - was silently answered by the
+ * daemon someone started yesterday, with yesterday's config and yesterday's
+ * logins. Measured: an `ask` pointed at a deliberately unreachable host
+ * returned a normal answer from the real site, and the ledger line named the
+ * wrong directory. Nothing in the output said so. Refusing is the only
+ * honest option: the alternative is data attributed to the wrong
+ * configuration.
+ */
 export async function daemonHealth(cfg, timeoutMs = 700) {
   const payload = await rawHealth(cfg, timeoutMs)
   const kind = identify(payload)
   if (kind === 'absent') return null
-  if (kind === 'ours') return payload
+  if (kind === 'ours') {
+    if (payload.home && resolve(payload.home) !== resolve(HOME)) {
+      throw new BridgeError(
+        `The uibridge on ${cfg.host}:${cfg.port} is serving a different state directory:
+` +
+          `  it is using : ${payload.home}
+` +
+          `  you asked for: ${HOME}
+` +
+          'Its config, logins and ledger are the ones that would be used. Run `uibridge stop` ' +
+          'first, or give this one its own "port" in config.json.',
+        { status: 409, code: 'daemon_other_home', retryable: false, detail: { daemon_home: payload.home, requested_home: HOME } }
+      )
+    }
+    return payload
+  }
   throw new BridgeError(
     isUibridge(kind)
       ? `A uibridge from a different build is already on ${cfg.host}:${cfg.port}. ` +
@@ -106,10 +134,16 @@ export async function daemonPost(url, body, { timeoutMs = 20 * 60 * 1000, header
   })
   const payload = await res.json().catch(() => null)
   if (!res.ok) {
-    const err = new Error(payload?.error?.message ?? `uibridge returned ${res.status}`)
-    err.status = res.status
-    err.code = payload?.error?.code ?? payload?.error?.type ?? null
-    throw err
+    // RE-TYPE IT LOCALLY. The daemon's error was a BridgeError before HTTP
+    // flattened it; handing back a bare Error meant the CLI's own handler
+    // did not recognise it and dumped a Node stack trace over an ordinary,
+    // expected condition ("you are signed out", "that thread is gone").
+    throw new BridgeError(payload?.error?.message ?? `uibridge returned ${res.status}`, {
+      status: res.status,
+      code: payload?.error?.code ?? payload?.error?.type ?? 'bridge_error',
+      retryable: payload?.error?.retryable ?? false,
+      detail: payload?.error?.detail,
+    })
   }
   return payload
 }

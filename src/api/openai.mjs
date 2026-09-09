@@ -75,7 +75,7 @@ export function readThreadId(body) {
  * what the UI was actually set to, whether the text is real markdown or a
  * lossy fallback, whether it really browsed, and what files came back.
  */
-export function completionResponse({ modelId, result, provider }) {
+export function completionResponse({ modelId, result, provider, unsupported = [] }) {
   return {
     id: `chatcmpl-${result.request_id}`,
     object: 'chat.completion',
@@ -94,6 +94,9 @@ export function completionResponse({ modelId, result, provider }) {
     _uibridge: {
       provider,
       request_id: result.request_id,
+      // Parameters the caller sent that a chat UI has no control for. Empty
+      // in the ordinary case; never silently dropped.
+      unsupported_parameters: unsupported,
       input: result.input ?? null,
       thread_id: result.thread_id,
       ledger: result.ledger ?? null,
@@ -117,6 +120,11 @@ export function completionResponse({ modelId, result, provider }) {
       // Session/CLI results retain this flag. The HTTP boundary rejects
       // recognised provider error notices with 502 instead of success.
       provider_error: result.provider_error ?? false,
+      // A short answer that opens like a provider failure but matches no
+      // MEASURED pattern. Reported, never silently promoted to an error:
+      // quarantine it, or set providers.<id>.failOnSuspectedProviderError.
+      provider_error_suspected: result.provider_error_suspected ?? false,
+      provider_error_match: result.provider_error_match ?? null,
       tables: result.tables,
       code_blocks: result.code_blocks,
       // Files the PROVIDER generated, already on disk.
@@ -153,6 +161,19 @@ export function modelsResponse(catalogue) {
       owned_by: m.provider,
     })),
   }
+}
+
+/**
+ * One model, the way `client.models.retrieve(id)` expects it.
+ *
+ * The official SDKs have this call, so a client that uses it to check a model
+ * exists before sending got a 404 from a server that does in fact serve that
+ * model. Same records as the list, addressed singly.
+ */
+export function modelResponse(catalogue, id) {
+  const found = catalogue.find((m) => m.id === id)
+  if (!found) return null
+  return { id: found.id, object: 'model', created: 0, owned_by: found.provider }
 }
 
 /** OpenAI-compatible SSE chunks. Metadata is attached to the final chunk. */

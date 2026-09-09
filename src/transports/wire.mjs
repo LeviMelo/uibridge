@@ -208,13 +208,29 @@ export class WireTap {
     return cap
   }
 
-  /** Collect EVERY matching request from now on, e.g. one upload per file. */
-  collect(pattern) {
-    const cap = new Capture(pattern, { many: true, tap: this })
+  /**
+   * Collect EVERY matching request from now on, e.g. one upload per file.
+   *
+   * `keep` bounds retention. A standing collector lives as long as its tab,
+   * and a daemon's tab lives as long as the daemon, so an unbounded queue of
+   * file bodies is a memory leak measured in megabytes per download.
+   */
+  collect(pattern, { keep = 24 } = {}) {
+    const cap = new Capture(pattern, { many: true, tap: this, keep })
     this.#watchers.add(cap)
     cap.release = () => this.#watchers.delete(cap)
     return cap
   }
+}
+
+/**
+ * The cheap half of a snapshot: everything except the bytes.
+ *
+ * Selecting a record must not cost a Buffer.concat per candidate - the
+ * candidates are file bodies.
+ */
+function descriptor(rec) {
+  return { url: rec.url, method: rec.method, status: rec.status, mime: rec.mime, headers: rec.headers ?? {} }
 }
 
 /** Plain data about one captured response. */
@@ -244,13 +260,15 @@ class Capture {
   #pattern
   #many
   #tap
+  #keep
   #records = []
   #waiters = []
 
-  constructor(pattern, { many, tap = null }) {
+  constructor(pattern, { many, tap = null, keep = Infinity }) {
     this.#pattern = pattern instanceof RegExp ? pattern : new RegExp(pattern)
     this.#many = many
     this.#tap = tap
+    this.#keep = keep
     this.release = () => {}
   }
 
@@ -268,6 +286,13 @@ class Capture {
 
   onRequest(rec) {
     this.#records.push(rec)
+    // Evict oldest-first, and only records that are finished and claimed or
+    // simply old: an in-flight record is still being written to.
+    while (this.#records.length > this.#keep) {
+      const i = this.#records.findIndex((r) => r.done)
+      if (i === -1) break
+      this.#records.splice(i, 1)
+    }
     this.#notify()
   }
 
@@ -336,6 +361,48 @@ class Capture {
   /** many-mode: every matching request that has completed. */
   completed() {
     return this.#records.filter((r) => r.done).map(snapshot)
+  }
+
+  /**
+   * many-mode: a completed record nobody has taken yet, matching `wanted`.
+   *
+   * WHY TAKING MATTERS. A standing collector may hold bytes that crossed the
+   * wire before anyone asked for them - measured on ChatGPT, opening a
+   * conversation pre-fetches its generated artifact during page load, so the
+   * file is already captured by the time a caller clicks "download" and no
+   * new request will EVER follow that click. Consuming records one at a time
+   * lets a caller use those bytes, while two files on one turn still get one
+   * body each instead of both getting the first.
+   *
+   * WHY `wanted` IS NOT OPTIONAL IN PRACTICE. A tab is long-lived and the
+   * collector is standing, so its queue mixes unrelated bodies that share an
+   * endpoint. MEASURED 2026-09-08: on a re-run against the same thread, the
+   * FIRST unclaimed body on ChatGPT's estuary/content collector was the
+   * user's own uploaded `_input.csv`, not the requested `audit_totals.csv` -
+   * a blind FIFO take returned the wrong file and reported success. In a
+   * literature pipeline that is a wrong table with a plausible name on it.
+   * Callers therefore pass a predicate and get nothing rather than
+   * something.
+   */
+  take(wanted = null) {
+    const rec = this.#records.find((r) => r.done && !r.taken && (!wanted || wanted(descriptor(r))))
+    if (!rec) return null
+    rec.taken = true
+    const out = snapshot(rec)
+    // The snapshot owns its own Buffer, so the retained chunks are dead
+    // weight from here on.
+    rec.chunks = []
+    return out
+  }
+
+  /** many-mode: how many completed, unclaimed records match. */
+  available(wanted = null) {
+    return this.#records.filter((r) => r.done && !r.taken && (!wanted || wanted(descriptor(r)))).length
+  }
+
+  /** many-mode: wait for the next unclaimed matching record, then take it. */
+  takeNext(timeout = 60000, wanted = null) {
+    return this.#until(() => this.take(wanted), timeout, `an unclaimed ${this.#pattern} response`)
   }
 
   /** many-mode: wait until at least `n` matching requests have completed. */

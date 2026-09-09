@@ -59,7 +59,29 @@ export class Session {
 
     const log = logger(id)
     const settings = providerSettings(cfg, id, Class.defaults)
-    const url = Class.selectors.url
+    // The site's address is part of the MEASURED contract, so selectors.json
+    // is the default - but an operator on a regional domain, or pointing a
+    // test at a local stand-in, must be able to say so. The previous line
+    // spread `url` over the merged settings unconditionally, which made
+    // `providers.<id>.url` in config.json a setting that looked supported,
+    // parsed fine, and did nothing at all.
+    const url = settings.url ?? Class.selectors.url
+
+    // NOT EVERY PROVIDER NEEDS A BROWSER. A provider declares this; the
+    // orchestrator does not assume it. The immediate reason is that the API
+    // contract, the CLI and the durable request layer are OURS, and testing
+    // them against a real chat UI measures that vendor's model, not this
+    // tool - slowly, non-deterministically, and out of the user's paid
+    // quota. A browserless provider lets every one of those be certified
+    // offline and exactly. (The same seam is what an HTTP-backed provider
+    // would need, so it is not a test-only affordance.)
+    if (Class.usesBrowser === false) {
+      const provider = new Class({ selectors: Class.selectors, settings: { ...settings, url }, log })
+      const ctx = { pages: () => [], newPage: async () => provider.newPage(), close: async () => {} }
+      const pool = new TabPool({ newPage: () => ctx.newPage() }, { max: settings.concurrency, name: `pool:${id}` })
+      return new Session({ provider, settings, ctx, pool, log })
+    }
+
     const { ctx, preparePage } = await attachBrowser({
       port: portFor(cfg, id, providerIds.indexOf(id)),
       userDataDir: settings.profileDir,
@@ -240,6 +262,31 @@ export class Session {
         if ((await provider.currentThread(page).catch(() => null)) !== requestedThread) {
           await provider.resumeThread(page, requestedThread)
           await provider.open(page)
+          // AND CONFIRM WE ARE ACTUALLY THERE, BEFORE ANYTHING IS SENT.
+          // Navigating to a thread id the site never issued does not
+          // necessarily fail: Gemini simply lands on a new, empty chat.
+          // Measured 2026-09-09 against the live site - a request carrying a
+          // made-up thread_id had its prompt typed into a BRAND NEW
+          // conversation in the user's account, was answered there, and only
+          // then was refused downstream as thread_mismatch. The refusal was
+          // right; the send was not. An orphan conversation and a spent turn
+          // are not recoverable by any amount of care further down.
+          let landed = null
+          const arrived = await waitFor(async () => {
+            landed = await provider.currentThread(page)
+            return landed === requestedThread ? landed : null
+          }, {
+            timeout: this.#settings.threadResumeMs ?? 10000,
+            poll: this.#settings.pollMs,
+            what: `the page to settle on thread ${requestedThread}`,
+          }).catch(() => null)
+          if (arrived !== requestedThread) {
+            throw new BridgeError(
+              `${this.id}: thread ${requestedThread} did not open (the page is on ${landed ?? 'no identifiable thread'}). ` +
+                'Nothing was sent. Run `uibridge threads` to see the threads this machine has recorded.',
+              { status: 503, code: 'thread_unavailable', retryable: true, detail: { requested: requestedThread, landed } }
+            )
+          }
         }
       } else if (this.#settings.newChatPerRequest) {
         await provider.newConversation(page)
@@ -299,11 +346,43 @@ export class Session {
           // lock, used to delay every send by a full minute.
           provenance.history = 'not_required'
         } else {
+          // ZERO messages is a different fact from SLOW messages, and only
+          // one of them is survivable.
+          //
+          // Measured 2026-09-09 on the live site: navigating to a thread id
+          // Gemini never issued does not fail and does not redirect - the URL
+          // keeps the made-up id, the page shows an empty conversation, and
+          // the site only assigns a real id once something is sent. So the
+          // request went through, the prompt was typed into a BRAND NEW
+          // conversation in the user's account, it was answered there, and
+          // the answer was then thrown away downstream as thread_mismatch.
+          // The user paid a turn and got an error and an orphan chat.
+          //
+          // A thread we were ASKED to resume was created by an earlier turn,
+          // so it has history by definition. None at all, after the full
+          // budget, is the site telling us the conversation is not there -
+          // the same verdict the export path already reaches. Refusing here
+          // costs a retry with nothing sent, which is strictly better than
+          // sending into the dark. Slow-but-present history is unchanged:
+          // it settles, or it proceeds with `not_loaded` recorded.
+          let appeared = true
           try {
             await waitFor(async () => (await provider.responseTexts(page)).length || null, {
               timeout: this.#settings.historyBaselineMs, poll: this.#settings.pollMs,
               what: 'the existing thread history baseline to load',
             })
+          } catch {
+            appeared = false
+          }
+          if (!appeared) {
+            throw new BridgeError(
+              `${this.id}: thread ${requestedThread} did not open - no message ever appeared in it. ` +
+                'Nothing was sent. If the id is right the site may just be slow, and a retry is worth it; ' +
+                'run `uibridge threads` to see the threads this machine has recorded.',
+              { status: 503, code: 'thread_unavailable', retryable: true, detail: { thread_id: requestedThread } }
+            )
+          }
+          try {
             await waitStable(async () => JSON.stringify(await provider.responseTexts(page)), {
               checks: 3, timeout: this.#settings.historyBaselineMs, poll: this.#settings.pollMs,
               what: 'the existing thread history baseline to settle', accept: (value) => value !== '[]',
@@ -311,7 +390,7 @@ export class Session {
             provenance.history = 'loaded'
           } catch (e) {
             provenance.history = 'not_loaded'
-            log.warn(`the DOM history baseline did not render quickly (${e.message}); sending anyway`)
+            log.warn(`the DOM history baseline did not settle (${e.message}); sending anyway`)
           }
         }
       }
@@ -355,8 +434,12 @@ export class Session {
         })
       }
       if (requestedThread && requestedThread !== answeredThread) {
+        // NOT RETRYABLE: by here the prompt has been sent and answered. The
+        // answer is refused because it cannot be attributed safely, but a
+        // retry would type the same prompt into the site a second time.
         throw new BridgeError(`${this.id}: requested thread changed while sending; refusing to misattribute the answer`, {
-          status: 502, code: 'thread_mismatch', retryable: true,
+          status: 502, code: 'thread_mismatch', retryable: false,
+          detail: { requested: requestedThread, answered: answeredThread },
         })
       }
 
@@ -365,7 +448,19 @@ export class Session {
       // fact a methods section needs, and it outranks any picker label.
       if (result.sent_as) provenance.sent_as = result.sent_as
       if (result.sent_effort !== undefined) provenance.sent_effort = result.sent_effort ?? null
-      if (this.#settings.strictModel && provenance.model?.expected_slug && !result.model_slug) {
+      // A SUSPECTED failure becomes a real one only if the operator asked
+      // for that. See core/answer-integrity.mjs for why this is opt-in.
+      if (result.provider_error_suspected && this.#settings.failOnSuspectedProviderError) {
+        result.provider_error = true
+      }
+
+      // PRECEDENCE: when the provider answered with its own failure notice,
+      // that IS the explanation, and it must win. Measured on 2026-09-08: a
+      // ChatGPT service failure closed the response stream, so no model slug
+      // arrived, and the caller was told "the server did not identify the
+      // model" - true, useless, and hiding the actual cause printed one line
+      // above it in the log.
+      if (this.#settings.strictModel && provenance.model?.expected_slug && !result.model_slug && !result.provider_error) {
         throw new BridgeError('The server did not identify the model that answered', { status: 502, code: 'model_unverified' })
       }
       if (result.model_slug) {
@@ -417,7 +512,7 @@ export class Session {
           at: new Date().toISOString(), request_id: rid, provider: this.id,
           thread_id: answeredThread, requested_thread_id: requestedThread,
           model, modes, provenance, input, inputs: resolved, outputs: result.files,
-          result: { characters: result.text.length, sha256: await textHash(result.text), extraction: result.extraction, truncated: !!result.truncated, provider_error: !!result.provider_error },
+          result: { characters: result.text.length, sha256: await textHash(result.text), extraction: result.extraction, truncated: !!result.truncated, provider_error: !!result.provider_error, provider_error_suspected: !!result.provider_error_suspected },
         })
         completed.ledger = { path: ledger.path }
       } catch (e) {
@@ -446,7 +541,16 @@ export class Session {
       // Retrieving the thread's files is opt-in: it clicks every download
       // control the thread ever rendered, and a caller who only wants the
       // text should not pay for that in requests to the site.
-      if (files) exported.files = await provider.downloadThreadFiles(page, exported.messages)
+      if (files) {
+        // `files` IS THE FILES. downloadThreadFiles returns
+        // { files, skipped? }, and assigning that whole object here produced
+        // `export.files.files` - a shape every consumer had to know about and
+        // no reader would guess. The array is the array; the reason a
+        // provider could not be asked is its own field.
+        const retrieved = await provider.downloadThreadFiles(page, exported.messages)
+        exported.files = retrieved.files ?? []
+        if (retrieved.skipped) exported.files_skipped = retrieved.skipped
+      }
       return exported
     })))
   }

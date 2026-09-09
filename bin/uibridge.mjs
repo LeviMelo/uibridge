@@ -14,7 +14,7 @@
 // first question is always "which selector stopped matching?", and that
 // deserves a real tool rather than a probe rewritten each time.
 
-import { loadConfig, providerSettings, portFor, ROOT, HOME } from '../src/core/config.mjs'
+import { loadConfig, providerSettings, portFor, ROOT, HOME, VERSION } from '../src/core/config.mjs'
 import { resolve } from 'node:path'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -63,7 +63,9 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge request status|recover|cancel <key> [--json]
   uibridge profiles [--json]         saved locations and last successful use
   uibridge chat <provider>             persistent same-tab conversation
-                                      [--thread=id] [--model=id] [--jsonl]
+                                      [--thread=id] [--model=id] [--thinking=on|off]
+                                      [--file=path ...] [--jsonl]
+                                      in the chat: /new  /thread  /help  /exit
   uibridge stop                       stop the background uibridge (restart after code changes)
   uibridge paths [--json]             where config, profiles, downloads and logs live
   uibridge autostart [--remove|--status]  run uibridge at logon (Windows task)
@@ -78,6 +80,30 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   providers: ${providerIds.join(', ')}
 `)
   process.exit(code)
+}
+
+/**
+ * Reject flags this command does not have.
+ *
+ * A tool used to produce data must never quietly do something other than
+ * what the command line said. Measured here: `export ... --out file.json`
+ * (the flag is `--output=`) wrote to the default location and said nothing,
+ * and in `ask` an unrecognised flag was swept into the PROMPT and sent to
+ * the model. Both look like success.
+ */
+function checkFlags(args, allowed, command) {
+  const bad = args
+    .filter((a) => a.startsWith('--') && a !== '--')
+    .map((a) => a.split('=')[0])
+    .filter((f) => !allowed.includes(f))
+  if (!bad.length) return
+  const near = (f) => allowed.find((a) => a.startsWith(f.slice(0, 4)) || f.startsWith(a.slice(0, 4)))
+  throw new BridgeError(
+    `${command}: unknown option ${bad.join(', ')}.` +
+      (near(bad[0]) ? ` Did you mean ${near(bad[0])}?` : '') +
+      ` Accepted here: ${allowed.join(' ')}`,
+    { code: 'invalid_request', status: 400 }
+  )
 }
 
 function requireProviderArg(name) {
@@ -307,6 +333,7 @@ async function ask(id, args) {
   const files = []
   let model = null
   const modes = {}
+  checkFlags(args, ['--file', '--model', '--thinking', '--json', '--thread', '--key', '--local'], 'ask')
   const words = []
   let json = false
   let threadId = null
@@ -390,6 +417,7 @@ async function printAsk(r, json) {
 }
 
 function chatOptions(args) {
+  checkFlags(args, ['--model', '--thread', '--thinking', '--file', '--jsonl', '--local'], 'chat')
   const options = { model: null, threadId: null, modes: {}, files: [], jsonl: args.includes('--jsonl') || !process.stdin.isTTY }
   for (const a of args) {
     if (a.startsWith('--model=')) options.model = a.slice(8)
@@ -411,11 +439,15 @@ async function chat(id, args) {
   const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: !!process.stdin.isTTY })
   let threadId = options.threadId
   let first = true
+  // The recovery key is printed only when it is USEFUL - i.e. when the turn
+  // failed. Announcing it before every message turns a conversation into a
+  // wall of bookkeeping.
+  let lastKey = null
   const run = async (prompt) => {
     if (!prompt.trim()) return
     const files = first ? options.files : []
     const key = `cli-${randomUUID()}`
-    if (daemon) console.error(`Request key: ${key}\nRecover: uibridge request recover ${key} --json`)
+    lastKey = daemon ? key : null
     const result = daemon
       ? flatten(
           await daemonPost(`${daemon.base}/v1/chat/completions`, {
@@ -434,24 +466,83 @@ async function chat(id, args) {
       await printAsk(result, false)
     }
   }
+  // A FAILED TURN MUST NOT END THE CONVERSATION. Measured 2026-09-09: a
+  // single 502 mid-session aborted the loop, the remaining input was never
+  // sent, and the thread being built was lost - in a chat, of all places,
+  // where the whole point is that the context accumulates. A chat UI does not
+  // close itself because one message failed, and neither does this.
+  //
+  // The failure is still REPORTED: printed on stderr, emitted as a JSONL
+  // record for a machine consumer, and remembered so the process can exit
+  // non-zero at the end.
+  let failed = 0
+  const turn = async (prompt) => {
+    try {
+      await run(prompt)
+    } catch (err) {
+      failed++
+      const message = err?.message ?? String(err)
+      if (options.jsonl) console.log(JSON.stringify({ error: { message, type: err?.code ?? 'error', retryable: err?.retryable ?? false }, thread_id: threadId, request_key: lastKey }))
+      const hints = []
+      if (threadId) hints.push(`The conversation is still open on thread ${threadId}.`)
+      if (lastKey) hints.push(`If that turn landed anyway, read it back with: uibridge request recover ${lastKey} --json`)
+      console.error(['', message, ...hints, ''].join('\n'))
+    }
+  }
+
+  // Under --jsonl, stdout is a machine's input and must stay one JSON document
+  // per line; the conversation's own chatter belongs on stderr, where the
+  // operator still sees it and no parser has to skip it.
+  const say = (text) => (options.jsonl ? console.error(text) : console.log(text))
+  const commands = {
+    '/exit': () => 'stop',
+    '/quit': () => 'stop',
+    '/new': () => { threadId = null; first = true; say('Starting a new conversation.') },
+    '/thread': () => say(threadId ? `thread ${threadId}  (resume later: uibridge chat ${id} --thread=${threadId})` : 'no thread yet - send a message first'),
+    '/help': () => say('/new  start a fresh conversation   /thread  show this thread id   /exit  leave'),
+  }
+
+  // ONE LOOP FOR BOTH. A piped session is the same conversation as a typed
+  // one, so `/new` means the same thing in a heredoc as it does at a prompt -
+  // and, more to the point, is never mistaken for something to SEND.
+  const handle = async (line) => {
+    const command = commands[line.trim()]
+    if (!command) return await turn(line)
+    return command()
+  }
+
+  // Ctrl-D closes stdin and Ctrl-C interrupts; either must leave through the
+  // `finally` below, or a --local run abandons a live browser context. An
+  // abort signal turns both into a normal end of loop.
+  const ended = new AbortController()
+  rl.on('close', () => ended.abort())
+  const bye = () => { if (threadId) say(`\nthread ${threadId} - resume with: uibridge chat ${id} --thread=${threadId}`) }
+
   try {
     if (process.stdin.isTTY) {
-      console.log(`Persistent ${id} chat${threadId ? ` on ${threadId}` : ''}. Type /exit to stop.`)
+      console.log(`Persistent ${id} chat${threadId ? ` on ${threadId}` : ''}. /help for commands, /exit to stop.`)
       while (true) {
-        const prompt = await rl.question('> ')
-        if (prompt.trim() === '/exit') break
-        await run(prompt)
+        let line
+        try {
+          line = await rl.question('> ', { signal: ended.signal })
+        } catch {
+          break
+        }
+        if (await handle(line) === 'stop') break
       }
+      bye()
     } else {
-      for await (const line of rl) await run(line)
+      for await (const line of rl) if (await handle(line) === 'stop') break
     }
   } finally {
     rl.close()
     await session?.close()
   }
+  if (failed) process.exitCode = 1
 }
 
 async function exportThread(id, args) {
+  checkFlags(args, ['--json', '--output', '--files', '--local'], 'export')
   const positional = args.filter((a) => !a.startsWith('--'))
   const threadId = positional[0]
   if (!threadId) usage(1)
@@ -471,10 +562,10 @@ async function exportThread(id, args) {
     if (json) console.log(JSON.stringify({ path, ...data }, null, 2))
     else {
       console.log(`${id} thread ${threadId}: ${data.messages.length} messages, complete=${data.complete}`)
-      for (const f of data.files?.files ?? []) {
+      for (const f of data.files ?? []) {
         console.log(f.error ? `  file ${f.name}: ${f.error}` : `  file ${f.name} -> ${f.path} (${f.bytes} bytes)`)
       }
-      if (data.files?.skipped) console.log(`  files: ${data.files.skipped}`)
+      if (data.files_skipped) console.log(`  files: ${data.files_skipped}`)
       console.log(path)
     }
   } finally { await session?.close() }
@@ -568,27 +659,82 @@ async function stopDaemon() {
   }
   if (kind !== 'ours') console.log(`Stopping a uibridge from an older build (${kind}).`)
   await fetch(`http://${cfg.host}:${cfg.port}/admin/shutdown`, { method: 'POST' }).catch(() => {})
-  console.log(`Stopped the uibridge on ${cfg.host}:${cfg.port}. Its browser tabs close with it.`)
+
+  // WAIT UNTIL IT IS ACTUALLY GONE. Shutdown is asynchronous - the daemon
+  // closes its browser first, and gives that up to five seconds - so
+  // returning as soon as the request is accepted made `uibridge stop` a lie
+  // for the moment that matters most: the very next command would find the
+  // port still held and reuse the daemon running the OLD code, which is
+  // exactly the situation `stop` exists to prevent.
+  for (let i = 0; i < 120; i++) {
+    if (identify(await rawHealth(cfg, 300)) === 'absent') {
+      return console.log(`Stopped the uibridge on ${cfg.host}:${cfg.port}. Its browser tabs close with it.`)
+    }
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  console.log(
+    `The uibridge on ${cfg.host}:${cfg.port} accepted the stop but is still listening after 12s. ` +
+      'Something is holding it; check .uibridge/daemon.log.'
+  )
+}
+
+/**
+ * The ledger, read through the daemon when one is listening.
+ *
+ * Both paths call the SAME core/ledger.mjs - there is no second
+ * implementation - but the daemon owns the state directory while it runs,
+ * and asking it means the CLI and an HTTP caller can never disagree about
+ * what was recorded.
+ */
+/**
+ * Ask the daemon, if one of this build is listening; otherwise null.
+ *
+ * Used for read-only state that both sides derive from the same module. It
+ * deliberately does NOT start a daemon: listing a local ledger should not
+ * launch a service, and when nothing is running there is nobody else who
+ * could be holding a different view of the state directory.
+ *
+ * A typed failure from the daemon (a 404 for an unknown thread, say) is a
+ * real answer and is re-thrown - only "there is no daemon" falls back.
+ */
+async function viaDaemon(path, body, pick) {
+  const live = await rawHealth(cfg).then((h) => identify(h) === 'ours').catch(() => false)
+  if (!live) return null
+  return pick(await daemonPost(`http://${cfg.host}:${cfg.port}${path}`, body))
 }
 
 async function threads(args) {
+  checkFlags(args, ['--json'], 'threads')
   const json = args.includes('--json')
   const provider = args.find((a) => !a.startsWith('--')) ?? null
   if (provider) requireProviderArg(provider)
-  const rows = await listThreads(resolve(HOME, cfg.ledgerDir), provider)
+  const rows = await viaDaemon(`/v1/threads/list`, { provider }, (r) => r.threads)
+    ?? await listThreads(resolve(HOME, cfg.ledgerDir), provider)
   if (json) return console.log(JSON.stringify(rows, null, 2))
   if (!rows.length) return console.log('No locally recorded threads yet.')
   for (const row of rows) console.log(`${row.provider}\t${row.thread_id}\t${row.turns} turn(s)\t${row.updated_at}`)
 }
 
-function thread(args) {
+async function thread(args) {
+  checkFlags(args, ['--json'], 'thread')
   const provider = requireProviderArg(args.find((a) => !a.startsWith('--')))
   const positional = args.filter((a) => !a.startsWith('--'))
   const threadId = positional[1]
   if (!threadId) usage(1)
-  const record = readThreadEvents(resolve(HOME, cfg.ledgerDir), provider, threadId)
+  const record = await viaDaemon('/v1/threads/events', { provider, thread_id: threadId }, (r) => r)
+    ?? readThreadEvents(resolve(HOME, cfg.ledgerDir), provider, threadId)
+  // A LOOKUP MISS IS NOT A SUCCESS. This exited 0 with an empty document, so
+  // a script could not tell "this thread has no recorded turns" from "you
+  // asked for a thread this machine has never seen" - and neither could a
+  // person reading a log.
+  if (!record.events.length) {
+    throw new BridgeError(
+      `No local ledger for ${provider} thread ${threadId}. ` +
+        'Run `uibridge threads` to list the threads this machine has recorded.',
+      { status: 404, code: 'thread_unknown', detail: { provider, thread_id: threadId } }
+    )
+  }
   if (args.includes('--json')) return console.log(JSON.stringify(record, null, 2))
-  if (!record.events.length) return console.log(`No local ledger for ${provider} thread ${threadId}.`)
   console.log(`${provider} thread ${threadId}\n${record.path}`)
   for (const event of record.events) {
     console.log(`\n${event.at}  request ${event.request_id}${event.result?.truncated ? '  TRUNCATED' : ''}`)
@@ -620,22 +766,38 @@ async function logout(id) {
   console.log(`${id}: dedicated uibridge session cleared`)
 }
 
-async function status(only, json = false) {
+/**
+ * THROUGH THE DAEMON, like every other command that needs a browser.
+ *
+ * This used to open its own Session, which launches a second Chrome against
+ * the same profile and debugging port the daemon uses. Only one process may
+ * drive a profile: the leftover Chrome from one such run held port 9334 and
+ * broke every later ChatGPT request with a 45s "Chrome never opened a
+ * debugging port". The daemon already has a warm, signed-in browser, so
+ * asking it is both correct and faster. `--local` still runs it in-process
+ * for debugging the browser layer itself.
+ */
+async function status(only, json = false, local = false) {
   const ids = only ? [requireProviderArg(only)] : providerIds
-  const out = {}
-  for (const id of ids) {
-    const session = await Session.open(id, { cfg })
-    try {
-      const verdict = await session.sessionState()
-      out[id] = {
-        state: verdict.state,
-        authenticated: verdict.state === 'in',
-        authority: verdict.authority,
-        because: verdict.because ?? [],
-        action: verdict.state === 'in' ? null : `uibridge login ${id}`,
+  let out = {}
+  if (!local) {
+    const daemon = await ensureDaemon(cfg, { log: logger('cli') })
+    out = await daemonPost(`${daemon.base}/v1/session`, only ? { provider: only } : {})
+  } else {
+    for (const id of ids) {
+      const session = await Session.open(id, { cfg })
+      try {
+        const verdict = await session.sessionState()
+        out[id] = {
+          state: verdict.state,
+          authenticated: verdict.state === 'in',
+          authority: verdict.authority,
+          because: verdict.because ?? [],
+          action: verdict.state === 'in' ? null : `uibridge login ${id}`,
+        }
+      } finally {
+        await session.close()
       }
-    } finally {
-      await session.close()
     }
   }
   if (json) console.log(JSON.stringify(out, null, 2))
@@ -675,6 +837,11 @@ async function requestCommand(args) {
   else console.log(JSON.stringify(result, null, 2))
 }
 
+// Asking for help is never an error, and never a provider name. Without
+// this, `uibridge ask --help` answered 'Unknown provider "--help"'.
+if (cmd === '--version' || cmd === '-v' || rest.includes('--version')) { console.log(VERSION); process.exit(0) }
+if (rest.includes('--help') || rest.includes('-h')) usage(0)
+
 try {
   if (cmd === 'serve' || cmd === undefined) {
     // Headless is the default because this is a background service. --headed
@@ -686,15 +853,25 @@ try {
   else if (cmd === 'login') await login(requireProviderArg(rest[0]))
   else if (cmd === 'logout') await logout(requireProviderArg(rest[0]))
   else if (cmd === 'status') {
+    checkFlags(rest, ['--json', '--local'], 'status')
     const only = rest.find((a) => !a.startsWith('--'))
-    await status(only, rest.includes('--json'))
+    await status(only, rest.includes('--json'), rest.includes('--local'))
   }
   else if (cmd === 'models') {
-    const ids = modelCatalogue().map((m) => m.id)
-    console.log(rest.includes('--json') ? JSON.stringify(ids, null, 2) : ids.join('\n'))
+    checkFlags(rest, ['--json'], 'models')
+    // A RUNNING DAEMON IS THE AUTHORITY. It keeps serving the code it started
+    // with, so after an edit the checkout and the daemon can disagree about
+    // which model ids exist - and the daemon's answer is the one a caller's
+    // request is actually judged against. Only when nothing is listening does
+    // the local catalogue speak for the API.
+    const live = await rawHealth(cfg).then((h) => (identify(h) === 'ours' ? h : null)).catch(() => null)
+    const ids = live
+      ? (await daemonPost(`http://${cfg.host}:${cfg.port}/v1/models`, null, { method: 'GET' })).data.map((m) => m.id)
+      : modelCatalogue().map((m) => m.id)
+    console.log(rest.includes('--json') ? JSON.stringify(ids, null, 2) : ids.join(String.fromCharCode(10)))
   }
   else if (cmd === 'threads') await threads(rest)
-  else if (cmd === 'thread') thread(rest)
+  else if (cmd === 'thread') await thread(rest)
   else if (cmd === 'doctor') {
     // --anon proves the check fires the OTHER way: a signal that has only
     // ever been seen succeed has not been tested.
@@ -720,11 +897,26 @@ try {
   else if (cmd === 'recon') await recon(rest)
   else usage(cmd === '-h' || cmd === '--help' ? 0 : 1)
 } catch (e) {
+  // An EXPECTED condition is not a crash. Signed out, thread gone, network
+  // down, a daemon serving another state directory: each is typed, each has
+  // an actionable message, and a Node stack trace over the top of one buries
+  // the sentence the operator needs. Only an unrecognised error - a bug in
+  // here - still prints its stack.
   if (e instanceof BridgeError) {
-    console.error(`\n${e.message}\n`)
+    if (rest.includes('--json')) {
+      // A pipeline reading --json must get a document on failure too.
+      console.error(JSON.stringify(e.toJSON(), null, 2))
+    } else {
+      console.error(`\n${e.message}\n`)
+      if (e.retryable) console.error('This one may succeed if you try it again.\n')
+    }
     process.exit(1)
   }
   throw e
 }
 
-if (cmd !== 'serve' && cmd !== undefined) process.exit(0)
+// Forced because a CDP connection or a keep-alive socket can hold the loop
+// open after the work is done. `process.exitCode` is whatever the command
+// set (`status` on a signed-out provider, `chat` after a failed turn) and
+// must not be flattened to 0 on the way out.
+if (cmd !== 'serve' && cmd !== undefined) process.exit(process.exitCode ?? 0)

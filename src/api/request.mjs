@@ -25,12 +25,38 @@ export const apiCapabilities = {
 
 const allowed = new Set(['model', 'messages', 'stream', 'stream_options', 'response_format', 'n',
   'attachments', 'files', 'modes', 'thread_id', '_uibridge'])
+
+// Controls a chat UI has no knob for. A caller sets these because their
+// client library always does - LangChain, llama-index and the OpenAI SDK's
+// own helpers all send sampling parameters whether you asked for them or not.
+//
+// REFUSING THEM MADE THE COMPATIBILITY CLAIM FALSE. The point of this project
+// is that an existing OpenAI client works against it unchanged; a 400 on
+// `temperature` means it does not, and no amount of correctness elsewhere
+// makes up for that. But silently swallowing them would be worse than either:
+// someone could believe they had set temperature=0 for a run they intend to
+// publish. So they are accepted, ignored, and REPORTED back in
+// `_uibridge.unsupported_parameters`, where a pipeline that cares can assert
+// on them. `strictParameters: true` restores the refusal for callers who
+// would rather fail than be surprised.
+const IGNORABLE = new Set(['temperature', 'top_p', 'top_k', 'max_tokens', 'max_completion_tokens',
+  'presence_penalty', 'frequency_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'seed', 'stop',
+  'user', 'metadata', 'service_tier', 'store', 'parallel_tool_calls', 'reasoning_effort'])
+
 const object = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
 
 export function parseCompletionRequest(body, cfg) {
+  const ignored = []
   for (const [key, value] of Object.entries(body)) {
-    if (!allowed.has(key) && value !== null) throw new RequestError(`Unsupported parameter: ${key}. The browser UI cannot honour this API control.`)
+    if (allowed.has(key) || value === null) continue
+    if (IGNORABLE.has(key) && !cfg?.strictParameters) { ignored.push(key); continue }
+    throw new RequestError(`Unsupported parameter: ${key}. The browser UI cannot honour this API control.`)
   }
+  // `model` is REQUIRED, as it is on the API this imitates. Falling back to a
+  // configured default meant a typo in the field name produced an answer from
+  // an unintended provider, recorded as if it had been chosen.
+  if (body.model === undefined) throw new RequestError('model is required')
+  if (typeof body.model !== 'string' || !body.model.trim()) throw new RequestError('model must be a non-empty string')
   if (body.stream !== undefined && typeof body.stream !== 'boolean') throw new RequestError('stream must be a boolean')
   if (body.n != null && body.n !== 1) throw new RequestError('Only n=1 is supported')
   if (body.stream_options != null) {
@@ -47,7 +73,7 @@ export function parseCompletionRequest(body, cfg) {
   }
   const modes = readModes(body)
   const threadId = readThreadId(body)
-  const requested = body.model ?? cfg.defaultProvider
+  const requested = body.model
   const { provider, model, matched } = resolveModel(requested, cfg.defaultProvider)
   if (!matched) throw new RequestError(`Unknown model "${requested}". Available: ${modelCatalogue().map((m) => m.id).join(', ')}`)
   for (const mode of Object.keys(modes)) {
@@ -56,6 +82,7 @@ export function parseCompletionRequest(body, cfg) {
   const format = responseFormat(body.response_format)
   if (format.instruction) prompt += `\n\n[output format]\n${format.instruction}`
   return { prompt, files, modes, threadId, requested, provider, model, format,
+    unsupported: ignored,
     includeUsage: body.stream_options?.include_usage === true }
 }
 

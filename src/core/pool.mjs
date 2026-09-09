@@ -10,7 +10,7 @@
 // clever pooling (handing out a broken tab) is worse than opening a new one.
 
 import { logger } from './log.mjs'
-import { BridgeError } from './errors.mjs'
+import { BridgeError, classifyBrowserError } from './errors.mjs'
 import { abortable, checkCancelled, currentSignal } from './cancel.mjs'
 
 export class TabPool {
@@ -90,7 +90,15 @@ export class TabPool {
       return await abortable(Promise.resolve().then(() => { checkCancelled(signal); return fn(page) }), signal)
     } catch (e) {
       failed = true
-      throw e
+      // FOREIGN ERRORS BECOME OURS HERE. Everything that touches the browser
+      // passes through this method, and Playwright reports "the wifi dropped"
+      // as an untyped Error, which the API could only render as HTTP 500
+      // "internal" - telling the caller that uibridge is broken when the truth
+      // is that the network is. Translating once, at the boundary, gives the
+      // HTTP layer, the CLI and the durable request layer (which decides
+      // whether a retry is even sensible) the same verdict. An unrecognised
+      // error is re-thrown untouched: a real bug must stay a 500.
+      throw classifyBrowserError(e) ?? e
     } finally {
       signal?.removeEventListener('abort', cancel)
       this.release(page, { discard: failed })

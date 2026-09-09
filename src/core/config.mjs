@@ -18,6 +18,21 @@ import { RequestError } from './errors.mjs'
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /**
+ * This build's version, from package.json.
+ *
+ * Reported on /health so "which uibridge am I talking to?" has an answer -
+ * the daemon outlives the shell that started it and can easily be running
+ * code older than the checkout in front of you.
+ */
+export const VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).version ?? '0.0.0'
+  } catch {
+    return '0.0.0'
+  }
+})()
+
+/**
  * Where uibridge keeps STATE: config.json, the Chrome profiles that hold
  * your logins, downloads, the thread ledger, exports, the daemon log.
  *
@@ -84,6 +99,10 @@ const DEFAULTS = {
     // Exporting history requests the history itself, so it gets a separate
     // generous budget rather than borrowing the send-path baseline budget.
     historyTimeoutMs: 60000,
+    // How long a requested thread has to actually appear in the URL after we
+    // navigate to it. Nothing is sent until it does: a site that quietly
+    // lands on a new chat instead would otherwise get the prompt anyway.
+    threadResumeMs: 10000,
     // A turn appears within seconds of a real submission. Its own short
     // budget, so a prompt that never got sent fails in a minute instead of
     // sitting for the full response timeout with a misleading message.
@@ -104,6 +123,18 @@ const DEFAULTS = {
     //        integrity matters more than getting an answer - a systematic
     //        review must not attribute a row to a model that did not write it.
     strictModel: true,
+    // Extra provider error wordings, as regex source strings. A provider can
+    // change its failure text at any time and an operator meets the new one
+    // before we do; adding it must not require editing source.
+    errorTextExtra: [],
+    // Turn a SUSPECTED provider failure (see core/answer-integrity.mjs) into
+    // a 502 instead of a flag. Off by default because a refusal or a terse
+    // apology can be legitimate content; on for pipelines that would rather
+    // lose a row than record one.
+    failOnSuspectedProviderError: false,
+    // A provider error notice is short. Longer text containing an apology is
+    // an answer.
+    errorNoticeMaxChars: 400,
     // Minimum spacing between request STARTS on a provider, across all its
     // tabs. A burst of fresh conversations trips these sites' throttling,
     // and a batch pipeline is exactly the caller that would burst. Per
@@ -129,9 +160,53 @@ function merge(base, over) {
 /** Load config.json if present, merged over defaults. */
 export function loadConfig(path = resolve(HOME, 'config.json')) {
   const file = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+  validateConfig(file, path)
   const cfg = merge(DEFAULTS, file)
   cfg.providers = cfg.providers ?? {}
   return cfg
+}
+
+// Keys that are legitimate inside `provider` / `providers.<id>` but are not
+// in the shared defaults: the window mode and the site address are resolved
+// per provider, and the debug port is per provider by construction.
+const PROVIDER_ONLY = ['headless', 'url', 'debugPort', 'downloadDir']
+
+/**
+ * Refuse a setting this build does not have.
+ *
+ * A misspelled key used to be merged in and ignored in silence, so
+ * `"headles": false` or `"responseTimeout": 900000` looked applied and
+ * changed nothing - the same failure mode as an unknown command-line flag,
+ * except it persists in a file and quietly governs every later run. For work
+ * whose results have to be reproducible, a configuration that does not mean
+ * what it says is worse than one that will not load.
+ *
+ * Keys beginning with `_` are ignored on purpose, so a config file can carry
+ * notes the way the selector files do.
+ */
+export function validateConfig(file, path = '(config)') {
+  const known = new Set([...Object.keys(DEFAULTS), 'provider', 'providers'])
+  const providerKeys = new Set([...Object.keys(DEFAULTS.provider), ...PROVIDER_ONLY])
+  const bad = []
+  const check = (obj, allowed, where) => {
+    for (const key of Object.keys(obj ?? {})) {
+      if (key.startsWith('_') || allowed.has(key)) continue
+      const near = [...allowed].find((a) => a.toLowerCase().startsWith(key.slice(0, 5).toLowerCase()))
+      bad.push(`${where}${key}${near ? ` (did you mean "${near}"?)` : ''}`)
+    }
+  }
+  check(file, known, '')
+  check(file.provider, providerKeys, 'provider.')
+  for (const [id, settings] of Object.entries(file.providers ?? {})) {
+    if (id.startsWith('_')) continue
+    check(settings, providerKeys, `providers.${id}.`)
+  }
+  if (bad.length) {
+    throw new RequestError(
+      `${path} has ${bad.length} setting(s) this build does not recognise: ${bad.join(', ')}. ` +
+        'Remove them, or prefix a key with "_" to keep it as a note.'
+    )
+  }
 }
 
 /** Effective settings for one provider: defaults, then per-provider overrides. */
@@ -142,9 +217,20 @@ export function providerSettings(cfg, id, providerDefaults = {}) {
   // would cost a window nobody asked for.
   s.headless = s.headless ?? cfg.headless
   if (cfg.windowModeOverride !== undefined) s.headless = cfg.windowModeOverride
-  s.downloadDir = resolve(HOME, s.downloadDir ?? cfg.downloadDir)
-  s.profileDir = resolve(HOME, cfg.profileDir, id)
-  s.ledgerDir = resolve(HOME, cfg.ledgerDir)
+  // EVERY PATH COMES FROM THE SAME HOME AS THE SERVER'S. `cfg.home` is how an
+  // embedder (and the test suite) points one instance at its own state
+  // directory; the API already resolved its ledger reads, its idempotency
+  // store and the identity on /health against it. These three did not, and
+  // took the process-global HOME instead. Measured 2026-09-09: a server given
+  // cfg.home answered a completion, wrote the ledger into the OTHER
+  // directory, then returned 404 thread_unknown for the thread it had just
+  // created, and /v1/threads listed nothing. profileDir is the dangerous one
+  // of the three - a split there drives a different Chrome profile, which is
+  // a different logged-in account.
+  const stateHome = cfg.home ?? HOME
+  s.downloadDir = resolve(stateHome, s.downloadDir ?? cfg.downloadDir)
+  s.profileDir = resolve(stateHome, cfg.profileDir, id)
+  s.ledgerDir = resolve(stateHome, cfg.ledgerDir)
   return s
 }
 

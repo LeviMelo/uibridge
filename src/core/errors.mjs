@@ -99,3 +99,63 @@ export class ContractError extends BridgeError {
     this.selector = selector
   }
 }
+
+/**
+ * The machine cannot reach the site (or the browser died). Retrying may work.
+ */
+export class NetworkError extends BridgeError {
+  constructor(message, { code = 'network', retryable = true, detail } = {}) {
+    super(message, { status: 503, code, retryable, detail })
+  }
+}
+
+// Chrome's own net error names, grouped by what the operator should DO.
+// MEASURED 2026-09-08: Playwright surfaces these as a plain Error whose first
+// line is e.g. "page.goto: net::ERR_NAME_NOT_RESOLVED at https://...", with
+// name === "Error" - indistinguishable, to a `catch`, from a bug in this
+// code. Untranslated they became HTTP 500 "internal", which tells a caller
+// that uibridge is broken when the truth is that the wifi dropped.
+const TRANSIENT_NET = /ERR_(NAME_NOT_RESOLVED|NAME_RESOLUTION_FAILED|INTERNET_DISCONNECTED|NETWORK_CHANGED|CONNECTION_[A-Z_]+|ADDRESS_UNREACHABLE|SOCKET_NOT_CONNECTED|EMPTY_RESPONSE|TIMED_OUT|TOO_MANY_REDIRECTS|HTTP2_[A-Z_]+|QUIC_PROTOCOL_ERROR|SSL_PROTOCOL_ERROR|ABORTED)\b/
+// Not transient: something on this machine decided the request may not go.
+const BLOCKED_NET = /ERR_(UNSAFE_PORT|BLOCKED_BY_[A-Z_]+|CERT_[A-Z_]+|PROXY_[A-Z_]+|TUNNEL_CONNECTION_FAILED)\b/
+const BROWSER_GONE = /(Target|Browser|Page) (page, context or browser )?(has been )?(closed|crashed)|browserType\.launch|Target closed/i
+
+/**
+ * Translate a foreign error (Playwright, CDP, Chrome) into a typed one.
+ *
+ * Returns the original when it is already typed, and null when it is not
+ * recognisable - an unrecognised error must stay a 500, because pretending
+ * to know what a bug is would hide it.
+ */
+export function classifyBrowserError(err) {
+  if (err instanceof BridgeError) return err
+  const message = String(err?.message ?? err ?? '')
+  const first = message.split(/[\r\n]/)[0]
+  const net = message.match(TRANSIENT_NET)
+  if (net) {
+    return new NetworkError(
+      `The browser could not reach the site (${net[0]}). Check this machine's ` +
+        'network connection, then try again.',
+      { detail: { chrome_error: net[0] } }
+    )
+  }
+  const blocked = message.match(BLOCKED_NET)
+  if (blocked) {
+    return new NetworkError(
+      `The browser refused the connection (${blocked[0]}) - a proxy, certificate ` +
+        'or policy on this machine is blocking it, so retrying will not help.',
+      { code: 'network_blocked', retryable: false, detail: { chrome_error: blocked[0] } }
+    )
+  }
+  if (BROWSER_GONE.test(message)) {
+    return new NetworkError('The browser closed while the request was running.', {
+      code: 'browser_gone',
+      detail: { detail: first.slice(0, 200) },
+    })
+  }
+  // Playwright marks its own waits, and they mean the same thing ours do.
+  if (err?.name === 'TimeoutError') {
+    return new BridgeError(first, { status: 504, code: 'timeout', retryable: true })
+  }
+  return null
+}

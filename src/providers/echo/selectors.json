@@ -1,0 +1,19 @@
+{
+  "_": [
+    "The echo provider has no DOM, so this file carries only what the shared",
+    "code reads off a provider's selectors: its address, its model ids and its",
+    "modes. `calibrated: false` keeps it out of /v1/models and the CLI's",
+    "provider list; test/support/echo.mjs sets UIBRIDGE_TEST_PROVIDER to turn",
+    "it on for one process."
+  ],
+  "calibrated": false,
+  "url": "https://echo.invalid/",
+  "models": {
+    "echo-fast": { "label": "Echo Fast", "slug": "echo-fast-1" },
+    "echo-slow": { "label": "Echo Slow", "slug": "echo-slow-1" },
+    "echo-refuses": { "label": "Echo Refuses", "slug": "echo-refuses-1", "refuse": true }
+  },
+  "modes": {
+    "thinking": { "onLabel": "thinking" }
+  }
+}

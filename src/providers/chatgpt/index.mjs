@@ -31,7 +31,7 @@ import { DomProvider } from '../dom-provider.mjs'
 import { BridgeError } from '../../core/errors.mjs'
 import { waitFor } from '../../core/async.mjs'
 import { WireTap } from '../../transports/wire.mjs'
-import { captureDownload, parseSchemeLinks } from '../../transports/files-wire.mjs'
+import { captureDownload, parseSchemeLinks, previewProgressed } from '../../transports/files-wire.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -102,6 +102,9 @@ export default class ChatGPTProvider extends DomProvider {
     if (!links.length) return []
 
     const tap = await WireTap.attach(page)
+    // Armed as early as possible: the page may fetch the file itself while
+    // the turn renders, and those bytes are the only copy that will exist.
+    const standing = this.fileBytes(tap)
     const turn = page.locator(this.sel.responseBlocks).last()
     const controls = turn.locator(g.control)
 
@@ -141,6 +144,8 @@ export default class ChatGPTProvider extends DomProvider {
             timeoutMs: this.settings.fileWaitMs,
             fallbackName,
             taken,
+            standing,
+            progressed: previewProgressed(page, g),
             log: this.log,
           })
         )
@@ -169,7 +174,7 @@ export default class ChatGPTProvider extends DomProvider {
     const pop = this.#popover(page)
     if (await pop.isVisible().catch(() => false)) return pop
     await this.requireContract(page, 'picker.trigger', p.trigger)
-    await page.locator(p.trigger).first().click({ timeout: 10000 })
+    await this.clickThrough(page.locator(p.trigger).first(), { timeout: 10000, what: 'the model picker' })
     await pop.waitFor({ state: 'visible', timeout: 8000 })
     return pop
   }

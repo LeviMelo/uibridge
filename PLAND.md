@@ -242,8 +242,10 @@ src/tools/
   capture.mjs       record one exchange for calibration
 
 bin/uibridge.mjs    CLI: serve, login, doctor, ask, recon, capture
-  test/unit.mjs       67 tests, no browser, ~2s
-test/live.py        live UI-surface suite (needs a signed-in profile)
+  test/unit.mjs       unit + contract tests, no browser
+test/api-conformance.mjs  the OpenAI surface, against a scripted provider
+test/cli.mjs        every command, flag and exit code, no chat UI
+test/acceptance.mjs live BRIDGE FIDELITY only - transport, not model quality
 examples/_client.py the client a pipeline copies
 ```
 
@@ -575,8 +577,8 @@ uibridge threads [provider] --json          # recorded provider-native threads
 uibridge thread <provider> <id> --json      # per-turn sent/downloaded file ledger
 node bin/uibridge.mjs doctor               # chrome, session, models, contracts
 node bin/uibridge.mjs doctor chatgpt --anon  # prove signed-out detection
-npm test                                   # 68 unit tests, no browser, ~2s
-python test/live.py                        # live suite (signed-in profile)
+npm test                                   # offline: API surface, CLI, contracts
+npm run test:acceptance -- gemini-pro      # live: does the bridge move bytes faithfully
 
 node bin/uibridge.mjs ask chatgpt "..." --file=paper.pdf --model=chatgpt-5.6-high
 node bin/uibridge.mjs recon observe https://example.com/   # map an unknown site

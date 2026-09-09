@@ -19,7 +19,7 @@ async function appFor(t, ask, open) {
 test('API rejects unsupported controls and lost input before session creation', async (t) => {
   let opened = 0
   const post = await appFor(t, null, async () => { opened++; throw new Error('must not open') })
-  for (const extra of [{ temperature: 0 }, { tools: [] }, { n: 2 }, { stream: 'false' },
+  for (const extra of [{ tools: [] }, { n: 2 }, { stream: 'false' }, { model: undefined },
     { messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'x' } }] }] },
     { attachments: ['C:/does-not-exist-uibridge.pdf'] }, { modes: { thinking: 'false' } },
     { modes: { imaginary: true } }, { thread_id: '../foreign' },
@@ -28,6 +28,14 @@ test('API rejects unsupported controls and lost input before session creation', 
     assert.equal(res.status, 400, JSON.stringify(extra))
   }
   assert.equal(opened, 0)
+
+  // Sampling controls are the exception, and deliberately so: every OpenAI
+  // client sends them, refusing made the compatibility claim false, and
+  // silently swallowing them would let someone believe a run was
+  // temperature=0. They are accepted, ignored, and named back to the caller
+  // in _uibridge.unsupported_parameters (see test/api-conformance.mjs).
+  const accepted = await post({ ...request, temperature: 0, max_tokens: 10 })
+  assert.notEqual(accepted.status, 400, 'a client that always sends temperature still works')
 })
 
 test('message labels and complete long Unicode inputs survive flattening', () => {

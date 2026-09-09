@@ -62,7 +62,12 @@ function unwrap(record) {
   if (record.state === 'completed') return record.response
   if (record.failure) {
     const { error } = record.failure.body
-    throw new BridgeError(error.message, { status: record.failure.status, code: error.type, detail: error.detail, retryable: false })
+    // Keep the ORIGINAL verdict. Replaying this key will always return this
+    // same stored failure, but that is a fact about the key, not about the
+    // condition: flattening a transient network fault to retryable:false
+    // told an automated caller to give up on something that would work on
+    // the next attempt with a fresh key.
+    throw new BridgeError(error.message, { status: record.failure.status, code: error.type, detail: error.detail, retryable: error.retryable ?? false })
   }
   throw new BridgeError('This key has an unfinished durable record. Its provider outcome is unknown; inspect the conversation before deliberately using a new key.', {
     status: 409, code: 'outcome_unknown', retryable: false,

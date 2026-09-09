@@ -166,8 +166,30 @@ const STEP = (arg) => {
       }
     }
 
+    // THE PROVIDER'S OWN TURN NUMBER, when it publishes one.
+    //
+    // MEASURED 2026-09-09 on a live ChatGPT thread of six messages: a
+    // reload mounted `conversation-turn-2` .. `-6` and NEVER mounted turn 1,
+    // through 20s of continuous sampling and an explicit scroll to the top
+    // of every scrollable ancestor. The thread had 123px of scroll overflow,
+    // so the scroll-based evidence was perfectly true - reached_top and
+    // reached_bottom both hold - and the export would have been reported
+    // COMPLETE while missing the user's first message.
+    //
+    // Scroll evidence answers "did the walk reach both ends of what the DOM
+    // was showing". It cannot answer "was the DOM showing everything". Only
+    // the provider's own numbering can, which is why it is read here.
+    let ordinal = null
+    if (contract.ordinalNode) {
+      const host = el.closest(contract.ordinalNode)
+      const raw = host ? (contract.ordinalAttr ? host.getAttribute(contract.ordinalAttr) : host.textContent) : null
+      const hit = raw == null ? null : String(raw).match(new RegExp(contract.ordinalPattern || '(\\d+)'))
+      if (hit) ordinal = Number(hit[1])
+    }
+
     return {
       id: ids[index],
+      ordinal,
       role: roleOf(el),
       branch,
       model_slug: attr(el, contract.modelAttr),
@@ -335,7 +357,20 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
    * whole export in the wrong place. Waiting for two identical readings at
    * the same offset is what makes a reading mean what it says.
    */
-  const fingerprint = (r) => `${r.scroll.top}:${readingKeys(r.rows, contract).join('|')}`
+  // MOUNTED IS NOT THE SAME AS RENDERED. Keyed on identity alone, a message
+  // that has arrived but has not yet drawn its attachment chip or its
+  // download button looks identical in two consecutive readings, so the walk
+  // calls it settled and moves on - and whatever had not rendered yet is
+  // simply absent from the export. Measured twice on 2026-09-09: a Gemini
+  // turn exported with no attachment on a request that demonstrably sent one
+  // as a file, and a ChatGPT thread whose generated file had no download
+  // control by the time its message was revisited. Folding the shape of each
+  // row into the fingerprint makes "settled" mean the content stopped
+  // changing, not merely that the same messages are present.
+  const shape = (row) =>
+    `${row.attachments?.length ?? 0}a${row.fileControls?.length ?? 0}f${row.media?.length ?? 0}m${(row.text ?? '').length}`
+  const fingerprint = (r) =>
+    `${r.scroll.top}:${readingKeys(r.rows, contract).join('|')}:${r.rows.map(shape).join('|')}`
   async function settledReading(tries = 5) {
     let prev = await step()
     for (let i = 1; i < tries; i++) {
@@ -349,6 +384,15 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
 
   const store = new Map()
   const order = []
+  // Every turn number this walk ever saw, across every reading. Accumulated
+  // rather than sampled once: on a virtualized thread the mounted slice
+  // legitimately starts above 1, and it is the union over the whole sweep
+  // that says whether the beginning of the thread was ever shown.
+  const ordinals = new Set()
+  const merge = (into, rows) => {
+    for (const r of rows ?? []) if (Number.isFinite(r.ordinal)) ordinals.add(r.ordinal)
+    mergeReading(store, into, rows, contract)
+  }
   let reachedTop = false
   let reachedBottom = false
 
@@ -356,14 +400,14 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
   // the top comes into view, so one jump to zero proves nothing: keep going
   // until neither the scroll height nor the message set changes.
   let last = await step('bottom')
-  mergeReading(store, [], last.rows, contract)
+  merge([], last.rows)
   let stable = 0
   for (let pass = 0; pass < maxTopPasses; pass++) {
     const before = { height: last.scroll.height, size: store.size }
     last = await step('top')
     await sleep(settleMs)
     last = await step()
-    mergeReading(store, [], last.rows, contract)
+    merge([], last.rows)
     const grew = last.scroll.height !== before.height || store.size !== before.size
     if (last.scroll.top <= 2 && !grew) {
       stable++
@@ -389,14 +433,14 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
     last = await settledReading()
     const run = readingKeys(last.rows, contract)
     runs.push(run)
-    mergeReading(store, order, last.rows, contract)
+    merge(order, last.rows)
     if (last.scroll.top >= last.scroll.max - 2) {
       // Confirm the bottom is really the bottom: content can still be
       // arriving below.
       await sleep(settleMs)
       const confirm = await settledReading()
       runs.push(readingKeys(confirm.rows, contract))
-      mergeReading(store, order, confirm.rows, contract)
+      merge(order, confirm.rows)
       if (confirm.scroll.top >= confirm.scroll.max - 2) {
         reachedBottom = true
         last = confirm
@@ -426,6 +470,27 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
 
   const messages = orderedMessages(store, order)
   const placed = messages.filter((m) => !m.order_unknown).length
+
+  // THE PROVIDER'S OWN NUMBERING, if it publishes one, has the final say on
+  // completeness. Turn numbers that start at 1 and run without a hole are
+  // the only positive evidence that the beginning of the thread was shown at
+  // all; scrolling to the top of a pane that never held the first message
+  // proves nothing. A provider with no numbering contributes nothing here
+  // (empty set), and completeness falls back to the scroll evidence alone.
+  const seenOrdinals = [...ordinals].sort((a, b) => a - b)
+  const ordinalGaps = seenOrdinals.length
+    ? seenOrdinals[seenOrdinals.length - 1] - seenOrdinals[0] + 1 - seenOrdinals.length
+    : 0
+  const ordinalsWhole = seenOrdinals.length === 0 || (seenOrdinals[0] === 1 && ordinalGaps === 0)
+  if (!ordinalsWhole) {
+    log?.warn(
+      `thread sweep: the provider numbers its turns from ${seenOrdinals[0]}` +
+        `${ordinalGaps ? ` with ${ordinalGaps} missing in between` : ''} - ` +
+        `${messages.length} message(s) were walked, but the thread does not start at turn 1, ` +
+        'so this export is reported as incomplete'
+    )
+  }
+
   return {
     messages,
     evidence: {
@@ -447,8 +512,15 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
       mounted_at_end: last?.mounted ?? 0,
       readings: runs.length,
       order_verified: disagreements === 0,
+      // The provider's own turn numbers. `first_turn: null` means this
+      // provider publishes none, so the question could not be asked -
+      // which is not the same as "the thread starts where we think".
+      first_turn: seenOrdinals.length ? seenOrdinals[0] : null,
+      last_turn: seenOrdinals.length ? seenOrdinals[seenOrdinals.length - 1] : null,
+      turn_gaps: seenOrdinals.length ? ordinalGaps : null,
     },
-    complete: reachedTop && reachedBottom && placed === messages.length && disagreements === 0,
+    complete:
+      reachedTop && reachedBottom && placed === messages.length && disagreements === 0 && ordinalsWhole,
   }
 }
 

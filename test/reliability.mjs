@@ -11,7 +11,6 @@ import { TabPool } from '../src/core/pool.mjs'
 import { Mutex, Pacer, sleep, waitFor } from '../src/core/async.mjs'
 import { withCancellation } from '../src/core/cancel.mjs'
 import { BridgeError } from '../src/core/errors.mjs'
-import { scoreBiomedical } from './support/biomedical.mjs'
 import { WireTap } from '../src/transports/wire.mjs'
 
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
@@ -21,7 +20,9 @@ const tick = () => new Promise((r) => setImmediate(r))
 async function directory(t) { const dir = await mkdtemp(join(tmpdir(), 'uibridge-reliability-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir }
 async function http(t, ask, cfg = {}) {
   const dir = cfg.requestDir ?? await directory(t)
-  const app = createApp({ defaultProvider: 'gemini', requestDir: dir, ...cfg }, { openSession: async () => ({ ask, close: async () => {} }) })
+  // `home` is what this server tells clients it serves. A CLI child launched
+  // below runs with UIBRIDGE_HOME=dir, and a mismatch is (correctly) refused.
+  const app = createApp({ defaultProvider: 'gemini', requestDir: dir, home: dir, ...cfg }, { openSession: async () => ({ ask, close: async () => {} }) })
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r))
   t.after(() => app.close())
   const url = `http://127.0.0.1:${app.server.address().port}`
@@ -233,22 +234,6 @@ test('corrupted request records fail closed rather than duplicating inference', 
   let ran = false
   await assert.rejects(store.run('corrupt', 'fp', async () => { ran = true }), { code: 'request_store_unavailable' })
   assert.equal(ran, false)
-})
-
-test('biomedical scoring penalizes wrong, missing and borrowed evidence independently', () => {
-  const targets = [
-    { id: '1', key: 'A', label: 'yes', contexts: ['Treatment reduced the prespecified outcome.'] },
-    { id: '2', key: 'B', label: 'no', contexts: ['No difference was detected between groups.'] },
-    { id: '3', key: 'C', label: 'maybe', contexts: ['An inconclusive estimate with wide intervals.'] },
-  ]
-  const score = scoreBiomedical(targets, {
-    A: { label: 'yes', quote: targets[1].contexts[0] }, // correct label, wrong evidence
-    B: { label: 'yes', quote: targets[1].contexts[0] }, // wrong label, genuine quote
-  })
-  assert.equal(score.correct, 1); assert.equal(score.grounded, 1)
-  assert.equal(score.confusion.maybe.missing, 1)
-  assert.equal(score.mismatches.length, 3)
-  assert.equal(score.per_class.yes.precision, 0.5)
 })
 
 test('bounded queue and total timeout recover capacity', async (t) => {

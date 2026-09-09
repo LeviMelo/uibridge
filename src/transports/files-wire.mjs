@@ -101,6 +101,22 @@ export function safeFileName(name, fallback = 'download.bin') {
 
 
 /**
+ * "Did the click land?" expressed as something visible on the page.
+ *
+ * Clicking a file control opens a preview panel, so the panel's appearance is
+ * proof the click was received even when no request follows it (the bytes may
+ * already have been fetched). Returns null when the provider has no MEASURED
+ * panel selector - no signal is honest; a guessed one is worse than none,
+ * because a selector that happens to match the page already would report
+ * progress unconditionally and suppress every legitimate retry.
+ */
+export function previewProgressed(page, generatedFile = {}) {
+  const sel = generatedFile?.previewPanel
+  if (!sel) return null
+  return () => page.locator(sel).first().isVisible().catch(() => false)
+}
+
+/**
  * Trigger a download in the page and keep the bytes the page received.
  *
  * `trigger` is whatever makes the app fetch the file - a click, in practice.
@@ -121,40 +137,80 @@ export async function captureDownload(
     fallbackName = 'download.bin',
     taken = new Set(),
     attempts = 3,
-    ackMs = 4000,
+    ackMs = 8000,
+    standing = null,
+    progressed = null,
     log,
   } = {}
 ) {
-  // ARMED BEFORE THE CLICK. A capture opened afterwards can only ever see
-  // the next download, which on a turn with two files means the wrong bytes
-  // under the right name.
-  const meta = metaPattern ? tap.expect(metaPattern) : null
-  const content = tap.expect(contentPattern)
+  // WHICH of the standing bodies is THIS file? The collector is per-tab and
+  // long-lived, so its queue holds unrelated bodies from the same endpoint -
+  // measured: a user's uploaded `_input.csv` sitting in front of the
+  // requested `audit_totals.csv`. The server names every body in
+  // content-disposition, and the control we are about to click is labelled
+  // with the same name, so that is the correlation. When we have no
+  // meaningful name to expect, no standing body is used at all: clicking and
+  // waiting is slower than guessing, and correct.
+  const expected = /^download(-\d+)?\.bin$/i.test(fallbackName) ? null : safeFileName(fallbackName).toLowerCase()
+  const isWanted = expected
+    ? (rec) => safeFileName(filenameFromDisposition(rec.headers['content-disposition']) ?? '', '').toLowerCase() === expected
+    : () => false
+  // BYTES MAY ALREADY BE HERE. `standing` is a long-lived collector armed
+  // when the tab's tap was created, so it holds any copy of the file that
+  // crossed the wire before this call - and on ChatGPT that is the common
+  // case, not an edge case: MEASURED 2026-09-08, opening a conversation
+  // pre-fetches its generated artifact during page load
+  // (files/download -> interpreter/download -> estuary/content), after which
+  // clicking the file control issues NO further request. The old code armed
+  // a fresh capture, clicked, waited 4s for a request that could never come,
+  // clicked twice more and reported "the page never asked for the file"
+  // while the bytes sat in the tab it was holding.
+  let res = standing?.take(isWanted) ?? null
+  const meta = res ? null : metaPattern ? tap.expect(metaPattern) : null
+  const content = res ? null : tap.expect(contentPattern)
   try {
-    // VERIFY THE EFFECT, NOT THE CLICK. A click that Playwright reports as
-    // successful can still be swallowed - measured repeatedly here, right
-    // after a modal was dismissed, where the app re-renders the message and
-    // the first click reaches a node with no handler yet. The observable
-    // that matters is the page ISSUING the request, so wait a moment for
-    // that and click again if it never came.
-    let sent = null
-    for (let i = 1; i <= attempts && !sent; i++) {
-      await trigger()
-      sent = await content.request(ackMs).catch(() => null)
-      if (!sent && i < attempts) log?.debug(`the click did not make the page fetch the file; trying again (${i}/${attempts})`)
+    if (res) {
+      log?.debug('the file was already on the wire (pre-fetched by the page); no click needed')
+    } else {
+      // VERIFY THE EFFECT, NOT THE CLICK. A click that Playwright reports as
+      // successful can still be swallowed - measured repeatedly here, right
+      // after a modal was dismissed, where the app re-renders the message and
+      // the first click reaches a node with no handler yet. The observable
+      // that matters is the page ISSUING the request, so wait a moment for
+      // that and click again if it never came.
+      //
+      // BUT A RE-CLICK IS NOT FREE. The same control now opens a preview
+      // panel, so clicking it again can toggle that panel shut. Between
+      // attempts we therefore also accept bytes arriving on the standing
+      // collector, and `progressed` lets a caller say "something is
+      // happening, keep waiting" instead of clicking into a moving UI.
+      let sent = null
+      for (let i = 1; i <= attempts && !sent; i++) {
+        await trigger()
+        sent = await content.request(ackMs).catch(() => null)
+        if (!sent && standing?.available(isWanted)) { res = standing.take(isWanted); break }
+        if (!sent && i < attempts && (await progressed?.().catch(() => false))) {
+          log?.debug('the page reacted but has not fetched yet; waiting instead of clicking again')
+          sent = await content.request(ackMs).catch(() => null)
+          if (!sent && standing?.available(isWanted)) { res = standing.take(isWanted); break }
+        }
+        if (!sent && i < attempts) log?.debug(`the click did not make the page fetch the file; trying again (${i}/${attempts})`)
+      }
+      if (!sent && !res) {
+        throw new Error(
+          `${attempts} clicks on the download link produced no request - the page never asked for the file`
+        )
+      }
+      if (!res) res = await content.finished(timeoutMs)
     }
-    if (!sent) {
-      throw new Error(
-        `${attempts} clicks on the download link produced no request - the page never asked for the file`
-      )
-    }
-    const res = await content.finished(timeoutMs)
     if (!res.ok) {
       throw new Error(`the site answered HTTP ${res.status ?? res.error} for the file itself`)
     }
 
     let declared = null
     let mime = res.headers['content-type'] ?? res.mime ?? null
+    // With pre-fetched bytes there is no paired metadata response to read a
+    // server-chosen filename from, so the caller's expected name is used.
     if (meta) {
       // Best-effort: the bytes are what matter, the JSON only names them.
       const m = await meta.finished(5000).catch(() => null)
@@ -179,7 +235,7 @@ export async function captureDownload(
     log?.debug(`saved generated file ${name} (${res.buffer.length} bytes) from the wire`)
     return { name, path, bytes: res.buffer.length, mime, source: 'wire' }
   } finally {
-    content.stop()
+    content?.stop()
     meta?.stop()
   }
 }

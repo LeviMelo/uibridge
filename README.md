@@ -1,7 +1,5 @@
 # uibridge
 
-Current engineering handoff and measured limitations: [HANDOFF.md](HANDOFF.md).
-
 A local, OpenAI-compatible HTTP API backed by chat UIs you already pay for.
 
 It replaces moving files in and out of a chat window by hand. Your
@@ -49,6 +47,56 @@ Set `"stream": true` to receive OpenAI-compatible server-sent events. ChatGPT
 content is emitted incrementally from the response already arriving in the
 page; DOM-only providers emit one content chunk when extraction completes.
 The final chunk carries `_uibridge`, followed by `data: [DONE]`.
+
+## What uibridge is not
+
+Stating this plainly, because it has been misread before and the misreading
+was expensive.
+
+uibridge is a **transport**. It moves bytes between a program and a chat UI
+you already pay for, and describes honestly what happened on the way. That is
+the whole product.
+
+It is **not a model benchmarker, evaluator, or eval harness.** Nothing in this
+repository measures whether Gemini or ChatGPT reasons well, classifies
+accurately, or beats the other. Those are frontier models: their capability is
+not in question, is unaffected by any line of code here, and measuring it
+spends your subscription to produce a number nobody working on this project
+can act on. An earlier version of the live suite graded record classification
+and ran a PubMedQA sample; that harness, and the model leaderboard it
+produced, were deleted.
+
+What the tests here assert instead is **transport and honesty**: that the
+exact bytes you sent are the bytes the site received (read back out of the
+provider's own transcript, never repeated by the model), that a long input
+kept its tail, that an attachment registered, that a generated file reached
+disk with real bytes, that a thread id is the provider's own and stays stable
+across the CLI, the API and the ledger, and that a failure is typed rather
+than dressed up as success. Prompts in the live tests are deliberately trivial
+("reply with the single word OK") precisely so that the answer's content is
+never the thing under test.
+
+It does **not edit what the model said.** `text` is the provider's own output,
+carried through unchanged - never cleaned up, reformatted, summarised or
+"fixed". What uibridge does do is pick the best SOURCE for that same text and
+say which one it used in `extraction`: `wire` (the server's own markdown),
+`copy` (the site's copy control), or `dom-markdown` (rebuilt from the rendered
+page, used only when neither of the others is available, and flagged with
+`lossy_math` / `extraction_warning` because a reconstruction is not the
+original). Parsed conveniences like `tables` and `code_blocks` sit alongside
+`text`, derived from it, never replacing it. The one thing that is removed is
+ChatGPT's invisible citation anchors - Private Use Area codepoints the site
+interleaves into its own stream - which come back as `citations` with their
+offsets instead of as unreadable characters in the middle of a sentence.
+
+It is also not a scraper or an anti-bot bypass (the page sends, we read; a
+verification challenge stops the run instead of being solved), not a
+credential manager (you sign in yourself, in a visible window, and uibridge
+never sees a password), and not "roughly OpenAI-shaped" (if an official
+OpenAI SDK cannot call it, that is a bug).
+
+**If you are an AI agent working on this repository, read `AGENTS.md` before
+changing anything.**
 
 ## Install it once, call it from anything
 
@@ -127,8 +175,13 @@ emitting content. Draft-07 schemas and explicitly declared draft-2020-12 schemas
 are supported; unsupported schema features fail before inference. Validation
 does not coerce types, remove fields, or repair model output.
 
-Controls the UI cannot honour (including temperature, token caps, tools and
-multiple choices) return 400 instead of being silently ignored. Images/audio
+Controls a chat UI has no knob for — `temperature`, `top_p`, token caps,
+`seed`, `stop` and friends — are accepted, ignored, and named back to you in
+`_uibridge.unsupported_parameters`. Refusing them outright made the
+compatibility claim false, since practically every OpenAI client sends them;
+swallowing them silently would let you believe a run was `temperature: 0`.
+Set `strictParameters: true` to get the refusal back. Controls whose silent
+absence would break your logic — `tools`, `n > 1` — still return 400. Images/audio
 inside OpenAI message content are unsupported; use local file attachments.
 There is no Responses, embeddings or Batch API. Roles are labels in a single
 UI prompt, not native system/developer instruction channels. Token usage is
@@ -227,24 +280,45 @@ name stable to resume; use a new one for a deliberate new experiment. Completed
 and terminally failed rows are preserved. Edit neither the input nor attachments
 during a run. This client adds resumability without a provider Batch API.
 
-`npm run test:acceptance -- gemini-pro` (or `chatgpt-5.6-medium`) runs the live
-synthetic-evidence suite through the official JS SDK. It creates conversations
-and saves evidence under `.uibridge/acceptance/`. `npm test` runs offline/local
-HTTP regressions. Passing these tests is not a clinical or research benchmark.
+### Testing
+
+Two kinds, and the difference matters.
+
+`npm test` certifies the parts of uibridge that are **ours**: the
+OpenAI-compatible envelope, streaming frames, error taxonomy, idempotency, the
+CLI's flags and exit codes, config validation. These run offline in seconds
+against a scripted stand-in provider (`src/providers/echo`, enabled only by
+`UIBRIDGE_TEST_PROVIDER`), because none of it involves a chat UI and testing it
+against one would consume a paid subscription to measure nothing.
+
+`npm run test:acceptance -- gemini-pro` (or `chatgpt-5.6-medium`) is the live
+suite, and it tests the one thing that cannot be tested any other way: that a
+real chat UI is driven correctly and the answer comes back intact. Its
+assertions are about transport and honesty — the tail of a 170,000-character
+input arrives, an attached file registers, a generated file lands on disk with
+real bytes, thread identity is the provider's own and stable, the export
+contains the exact prompt that was sent, the envelope describes what happened.
+Evidence is saved under `.uibridge/acceptance/`.
+
+**Neither suite measures the model.** uibridge is a bridge: whether Gemini or
+ChatGPT reasons well is that vendor's business, is unaffected by anything in
+this repository, and a score for it here would be a number nobody working on
+this project could act on. An earlier version of the live suite graded record
+classification and ran a PubMedQA sample; that harness has been removed.
 
 `node test/live-reliability.mjs MODEL` checks active cancellation followed by
 four paced inferences with concurrent duplicate requests and replay.
-`node test/scientific.mjs MODEL` downloads a pinned revision of the expert-labelled
-[PubMedQA dataset](https://github.com/pubmedqa/pubmedqa), selects four records
-per class deterministically, and compares short and long contexts with the
-reference conclusions/labels withheld. Scores include confusion matrices,
-macro-F1, exact evidence-quote matching and consistency across contexts.
-This public sample is not the official test split, may occur in model training,
-and is too small to estimate general scientific accuracy. An exact quote is
-not proof that it supports the conclusion. For your own adjudicated corpus,
-pass a JSONL path as the third argument; each row contains `id`, `question`,
-`contexts` (strings), and `label` (`yes`, `no`, `maybe`). Input manifests,
-hashes and results remain local under `.uibridge/scientific/`.
+
+`node test/certify.mjs [model ...]` is certification by use: it drives the
+shipped CLI in real child processes and the official `openai` client over
+HTTP, against a live provider, and checks that all three layers - CLI, API and
+ledger - describe the same conversation. It covers discovery, refusals, a real
+ask, a durable keyed request, a multi-turn chat, the thread ledger, a full
+export to disk, streaming, uploads, generated files, structured output, the
+long-input transport, the account-protecting refusals, and mixed CLI+API
+concurrency. Evidence and a machine-readable report land in
+`.uibridge/certify/`.
+
 
 ### Browser visibility
 
@@ -299,6 +373,23 @@ tested, but simultaneous edits, model changes, branching or submissions from
 another client have no exclusivity guarantee. Avoid modifying the thread
 elsewhere while a bridge request runs. Use one driver per profile.
 
+Annexes both ways. A local file goes up with `files: [path]` on the API,
+`--file=path` on `ask` and `chat` (attached to the conversation's first turn),
+and a file the provider generates comes back already downloaded, with its
+local path, size and MIME in `_uibridge.files`. `uibridge export <provider>
+<id> --files` retrieves everything a whole thread generated. A file that is
+not on disk fails before anything reaches the site.
+
+Registration is verified, not assumed: on ChatGPT by the site's own upload
+confirmation on the wire (`process_upload_stream`, waiting for `file_ready`),
+on Gemini by the attachment chip appearing in the composer. A thread export
+records the annexes on the user turn that carried them, so an audit record
+shows what was sent alongside the prompt. One caveat worth knowing: the label
+in an export is the name the SITE renders, not the file you uploaded - ChatGPT
+drops the extension and title-cases the stem, so `trial_outcomes.csv` is
+recorded as `Trial Outcomes`. The bytes that were sent are unaffected; only the
+displayed label is the site's.
+
 `node test/live-continuations.mjs gemini-pro` exercises initial CSV generation,
 thinking off/on/off continuations, a second native view, and overlapping file
 generation on another thread. It tests transport and audit behavior, not
@@ -306,28 +397,69 @@ scientific knowledge.
 
 ## Commands
 
+`uibridge <command>` if you installed it globally; `node bin/uibridge.mjs
+<command>` from a checkout. Every command takes `--help`.
+
 ```bash
-node bin/uibridge.mjs serve                 # the API (default 127.0.0.1:8477)
-uibridge stop                               # stop it (a running one keeps the old code)
-node bin/uibridge.mjs login <provider>      # sign in; you type the password, never this tool
+uibridge serve [--headed|--headless]        # the API (default 127.0.0.1:8477)
+uibridge stop                               # stop it - a running one keeps the OLD code
+uibridge status [provider] [--json]         # scriptable authentication verdict
+uibridge paths [--json]                     # where config, profiles, downloads and logs live
+uibridge models [--json]                    # callable model ids
+
+uibridge login <provider>                   # sign in; you type the password, never this tool
 uibridge logout <provider>                  # clear that dedicated profile's site session
-uibridge status [provider] --json           # scriptable authentication verdict
-uibridge models --json                      # callable model ids
-uibridge ask gemini --thread=<native-id> "continue here"
-uibridge ask chatgpt --file=anything.bin "use this file"
-uibridge chat chatgpt --thread=<native-id>  # persistent same-tab REPL
-uibridge threads [provider] --json           # native threads recorded locally
-uibridge thread <provider> <native-id> --json # turns and sent/downloaded files
-uibridge export chatgpt <native-id> --json   # active-branch history export
-uibridge export chatgpt <native-id> --files  # ...and download every file it generated
-node bin/uibridge.mjs doctor [provider]     # Chrome, session, models, UI contracts
-node bin/uibridge.mjs ask chatgpt "..."     # one prompt, no server
-node bin/uibridge.mjs ask chatgpt --file=paper.pdf --model=chatgpt-5.6-high "..."
-node bin/uibridge.mjs doctor chatgpt --anon # prove signed-OUT is detected (throwaway profile)
-node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabulary + network
+uibridge profiles [--json]                  # saved profile locations and last successful use
+
+uibridge ask <provider> "prompt" [--file=path ...] [--model=id]
+       [--thinking=on|off] [--thread=native-id] [--key=ID] [--json] [--local]
+uibridge chat <provider> [--thread=id] [--model=id] [--thinking=on|off]
+       [--file=path ...] [--jsonl]          # persistent same-tab REPL
+uibridge request status|recover|cancel <key> [--json]
+
+uibridge threads [provider] [--json]        # native threads recorded locally
+uibridge thread <provider> <native-id> [--json]   # turns and sent/downloaded files
+uibridge export <provider> <native-id> [--files] [--output=path] [--json]
+
+uibridge doctor [provider]                  # Chrome, session, models, UI contracts
+uibridge doctor <provider> --anon           # prove signed-OUT is detected (throwaway profile)
+uibridge autostart [--remove|--status]      # run uibridge at logon (Windows task)
+uibridge capture <provider> ["prompt"] [--continue]   # record DOM + network for one exchange
+uibridge recon observe <url>                # map an unknown site: DOM vocabulary + network
+uibridge recon exchange <url> ...           # drive one turn there and record the wire
+
 npm test                                    # unit and local HTTP tests; no browser required
-python test/live.py                         # live UI-surface suite
+node test/acceptance.mjs <model> [case ...] # live end-to-end suite through the OpenAI SDK
 ```
+
+An unrecognised option is an error, not something to ignore: `--out` on a
+command whose flag is `--output=` used to write to the default path and say
+nothing, and in `ask` it was swept into the prompt and sent to the model.
+
+### The CLI is a client of the API
+
+There is one implementation, not two. Every command that needs a browser goes
+over HTTP to the running uibridge:
+
+| command | endpoint |
+|---|---|
+| `ask`, `chat` | `POST /v1/chat/completions` |
+| `export` | `POST /v1/threads/export` |
+| `status` | `POST /v1/session` |
+| `models` | `GET /v1/models` |
+| `threads`, `thread` | `POST /v1/threads/list`, `POST /v1/threads/events` |
+| `request status\|recover\|cancel` | `GET,POST /v1/requests/*` |
+
+`--local` drives a browser in the CLI process instead, for debugging the
+browser layer itself. Three commands are deliberately local because they are
+not API operations: `login` and `logout` need a **visible window a human types
+into**, and `doctor` has to be able to diagnose a daemon that will not start.
+
+This is not tidiness. Only one process may drive a Chrome profile, and
+`status` used to open its own Session: a leftover Chrome from one such run
+held the debugging port, and every later request failed with a 45-second
+"Chrome never opened a debugging port". `uibridge status` is now answered by
+the daemon's already-warm browser.
 
 ### One browser, not one per command
 
@@ -356,8 +488,37 @@ The response envelope follows Chat Completions for the supported subset.
 Everything provider-specific sits under `_uibridge`, and it is there to be
 honest about what happened rather than to look tidy:
 
+The complete set, from a real response:
+
+```json
+"_uibridge": {
+  "provider": "gemini", "request_id": "j0vc13gd4", "thread_id": "67a49e3d6ee75736",
+  "input": { "characters": 26, "sha256": "dd28...", "transport": "composer" },
+  "ledger": { "path": ".uibridge/threads/gemini/67a49e3d6ee75736.jsonl" },
+  "elapsed_ms": 10640,
+  "provenance": {
+    "model": { "requested": "gemini-pro", "applied": "...Pro Extended", "verified": true, "note": "already active" },
+    "modes": {}, "final_state": "...Pro Extended"
+  },
+  "extraction": "copy", "extraction_warning": null, "markdown": true, "lossy_math": false,
+  "provider_error": false, "provider_error_suspected": false, "provider_error_match": null,
+  "tables": [], "code_blocks": [], "files": [], "json": null,
+  "browsed": false, "searched": false, "sources": [], "citations": [],
+  "truncated": false, "throttle_notice": null
+}
+```
+
 | field | why it exists |
 |---|---|
+| `provider`, `request_id`, `elapsed_ms` | Which provider answered, the id this run is logged under, and how long it took end to end. |
+| `input.characters`, `input.sha256`, `input.transport` | Exactly what was sent, hashed, and *how*: `composer` (typed) or `attachment` (too large to type, so carried as a temporary UTF-8 file). A prompt that took the attachment path is a different experiment from one that did not. |
+| `ledger.path` | Local JSONL audit file for this native thread. |
+| `provenance.model.requested` / `.note` | What you asked for, and why the verdict is what it is (`already active`, `unknown model`, ...). |
+| `provenance.modes` | Per-mode outcome (e.g. thinking) in the same shape as the model verdict. |
+| `provider_error_suspected`, `provider_error_match` | See *Answer integrity* below: a flag for an answer that opens like a failure but matches no measured wording, and the pattern that produced a positive verdict. |
+| `searched` | The UI's search affordance was used, as distinct from `browsed`. |
+| `json` | The parsed object when a `response_format` was requested and validated; `null` otherwise. |
+| `extraction_warning` | Set when the tier that produced the text is weaker than the one that was expected. |
 | `provenance.model.applied` / `.verified` | Selection is read back from the UI and, where possible, checked against the response wire. `strictModel: true` (default) makes failed verification an error. Setting it to false permits unverified results, explicitly marked here. |
 | `thread_id` | The provider's native thread UUID from its URL. Pass it as top-level `thread_id` to continue that thread; omit it for a fresh isolated thread. |
 | `provenance.final_state` | The picker label read *after* model and modes were both applied. The per-step labels are stale by then. |
@@ -384,6 +545,11 @@ and `file_controls` naming files the thread **generated**. `--files` (or
 `"files": true`) also retrieves those generated files, scrolling each
 message back into view to reach its download control.
 
+With `--files`, the retrieved files are an array on `files` - each entry
+naming the file, its local `path`, `bytes` and `mime`, or an `error` if that
+one could not be fetched. A provider with no measured download control says so
+once in `files_skipped` rather than pretending the thread had none.
+
 These chat UIs virtualize their history: on a 34-message thread only six
 messages exist in the document at any moment, so an export is a walk, and
 `evidence` says how well that walk went rather than asking you to trust it:
@@ -396,15 +562,72 @@ messages exist in the document at any moment, so an export is a walk, and
 | `readings`, `order_verified` | Each reading sees a contiguous slice of the thread in document order. `order_verified` means the assembled order contradicts none of them. False means the transcript is not faithful — and it says so instead of pretending. |
 | `branch_pager`, `branched_messages`, `branches_walked` | Whether the provider has a calibrated control for sibling versions (regenerated answers, edited questions), how many messages have them, and whether they were visited. `branch_pager: false` means the question was never asked — which is not the same as "there are none". |
 | `mounted_at_end` | How many messages the page was holding when the walk finished. Far below `message_count` is the virtualization being handled. |
+| `first_turn`, `last_turn`, `turn_gaps` | The provider's OWN turn numbers, when it publishes them. This is the only evidence that says whether the DOM ever showed the *start* of the thread — scrolling to the top of a pane that never held the first message proves nothing. `first_turn: null` means the provider publishes no numbering, so the question could not be asked. |
 
 `complete` is true only when both ends were reached, every message was
-placed, and the order verified.
+placed, the order verified, and — where the provider numbers its turns — those
+numbers start at 1 with no gaps.
 
-Errors are typed, so a caller can branch: `401 signed_out`, `503 challenge`,
-`400 invalid_request`, `502 ui_contract` (the UI changed), `504 timeout`,
-`501 not_calibrated`, `429 rate_limited`. An error is something that stopped a message from being
-retrieved. A message that *was* retrieved always comes back as a 200, even
-when the provider used it to say it failed.
+That last clause exists because of a measured failure. Reloading a six-message
+ChatGPT thread mounted turns 2 through 6 and never mounted turn 1, through 20
+seconds of sampling and an explicit scroll to the top of every scrollable
+ancestor. The thread had 123px of scroll overflow, so `reached_top` and
+`reached_bottom` were both perfectly true — and the export would have described
+itself as the whole thread while missing the user's opening message. Scroll
+evidence answers "did the walk reach both ends of what the DOM was showing"; it
+cannot answer "was the DOM showing everything".
+
+### Errors
+
+An error is something that stopped a message from being retrieved. A message
+that *was* retrieved always comes back as 200, even when the provider used it
+to say it failed - that is reported in `_uibridge.provider_error` instead.
+
+Every error carries `{ error: { message, type, retryable, detail? } }`, where
+`type` is one of the codes below. They exist so a caller can branch instead of
+matching prose:
+
+Every error response also carries an **`x-should-retry`** header, `true` or
+`false`, matching the `retryable` field in the body. Both official OpenAI SDKs
+retry 5xx twice by default and both honour that header. It exists because a
+wasted retry against a hosted API costs a fraction of a cent, while here it
+drives a browser: measured, one `client.chat.completions.create()` that hit a
+502 reached the provider three times, and on a real site each of those is
+another message typed into your own conversation and another turn off your
+subscription. A failure that already reached the site is never marked
+retryable.
+
+| status | code | meaning |
+|---|---|---|
+| 400 | `invalid_request` | Your request: unknown model, missing file, empty messages, a config key this build does not have. |
+| 401 | `signed_out` | Run `uibridge login <provider>`. Carries the evidence that led to the verdict. |
+| 404 | `thread_unknown` | No local ledger for that thread on this machine. |
+| 404 | `model_not_found` | `GET /v1/models/{id}` for a model this build does not serve. |
+| 404 | `request_not_found` | No durable record for that Idempotency-Key. |
+| 409 | `idempotency_conflict` | That key was used for a *different* request. |
+| 409 | `outcome_unknown` | The key has an unfinished record: the provider outcome is genuinely unknown. Inspect the conversation before reusing it. |
+| 409 | `daemon_other_home` | The uibridge holding the port serves a different state directory. |
+| 429 | `rate_limited` | The site answered an actual HTTP 429. `retryable`, after a wait. |
+| 503 | `notice_blocking` | One of the site's own modals kept covering a control and returning after each dismissal. ChatGPT's "too many requests" notice is one of these: it restricts access to *previous conversations*, not sending, so a retry usually succeeds. |
+| 499 | `request_cancelled` | Cancelled by the caller. |
+| 501 | `not_calibrated` | The provider has no measured contract for what you asked (e.g. thread export). |
+| 502 | `ui_contract` | A selector we depend on matches nothing: the UI changed. |
+| 502 | `model_unverified`, `model_not_applied`, `mode_not_applied` | The model or mode could not be confirmed from the UI. Under `strictModel: false` the first becomes a flag instead. |
+| 502 | `submit_failed`, `submit_uncertain`, `compose_failed` | The prompt did not go out, or it is not certain that it did. |
+| 502 | `thread_mismatch`, `thread_unidentified` | The page is not on the thread we asked for, or will not say which thread it is on. |
+| 502 | `upload_failed` | The site refused an attachment. |
+| 502 | `download_identifier`, `download_artifact_missing`, `download_cancelled` | A generated file could not be retrieved. |
+| 502 | `non_monotonic_stream` | The stream contradicted itself; the text is not trustworthy. |
+| 503 | `challenge` | A verification challenge is up. uibridge never solves or evades one: clear it in the browser window. |
+| 503 | `network`, `network_blocked`, `browser_gone` | This machine could not reach the site, was blocked by a local proxy/certificate policy, or lost the browser. Only the first and last are `retryable`. |
+| 503 | `thread_unavailable`, `thread_history_unavailable` | The thread would not open, or its history would not load. |
+| 503 | `browser_unavailable`, `pool_closed`, `session_closed`, `shutting_down`, `queue_full`, `request_store_unavailable` | uibridge itself is not in a position to serve this right now. |
+| 503 | `daemon_not_running`, `daemon_start_failed`, `daemon_incompatible` | CLI-side: no daemon, it would not start, or the port belongs to another build. |
+| 504 | `timeout`, `request_timeout` | A wait exceeded its budget. |
+| 504 | `composer_unavailable` | The prompt box never became usable. The message names the page and any notice that was covering it. |
+| 504 | `upload_not_registered` | The file never reached the page. Nothing was sent. |
+| 504 | `upload_slow` | The file is attached and the site is still uploading it. |
+| 500 | `chrome_missing`, `port_in_use`, `client_disconnected`, `not_implemented`, `bridge_error` | Local environment, or a bug in here. An unrecognised internal error stays a 500 on purpose rather than being dressed up as something familiar. |
 
 ## Architecture
 

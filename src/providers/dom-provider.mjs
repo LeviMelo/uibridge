@@ -30,8 +30,10 @@ import {
 import { reconstructMarkdown } from '../transports/markdown-dom.mjs'
 import { sweepThread, mountMessage } from '../transports/thread-dom.mjs'
 import { WireTap } from '../transports/wire.mjs'
+import { nudgeOnScreen } from '../core/window.mjs'
 import { fillComposer, normalizeComposerText, readComposer } from '../core/composer.mjs'
-import { captureDownload } from '../transports/files-wire.mjs'
+import { captureDownload, previewProgressed } from '../transports/files-wire.mjs'
+import { classifyAnswer, errorPatterns } from '../core/answer-integrity.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
 const cdpSessions = new WeakMap()
@@ -41,6 +43,8 @@ async function cdp(page) {
 }
 
 export class DomProvider extends Provider {
+  static #fileCollectors = new WeakMap()
+
   /** Overridden per provider; see each selectors.json. */
   static selectors = {}
 
@@ -126,18 +130,50 @@ export class DomProvider extends Provider {
   }
 
   /**
-   * Dismiss the site's own blocking notices, and say which ones were there.
+   * A standing collector for generated-file bytes, armed once per tab.
    *
-   * THIS IS NOT COSMETIC. ChatGPT's rate-limit modal sits in a `fixed
-   * inset-0 z-50` backdrop, so while it is up EVERY click is swallowed:
-   * Playwright reports "subtree intercepts pointer events" and a download
-   * click times out having sent no request at all. Two runs were spent
-   * blaming the download endpoint for that.
-   *
-   * The notice is still REPORTED rather than raised - on ChatGPT it locks
-   * history, not sending, so a request that otherwise worked must not be
-   * turned into a failure. Returns [{ kind, name, text }].
+   * The bytes of a generated file can cross the wire at moments nobody
+   * chose: MEASURED on ChatGPT, simply opening a conversation pre-fetches
+   * its artifact during page load. A capture armed at click time therefore
+   * misses precisely the copy that exists. This collector is installed the
+   * first time a tab is used for files and keeps every matching response, so
+   * retrieval becomes "take the bytes we already have, or click and wait for
+   * them" instead of "click and hope a request follows".
    */
+  fileBytes(tap) {
+    const g = this.sel.generatedFile
+    if (!g?.contentPattern) return null
+    if (!DomProvider.#fileCollectors.has(tap)) {
+      DomProvider.#fileCollectors.set(tap, tap.collect(g.contentPattern))
+      this.log?.debug('watching for generated-file bytes on this tab')
+    }
+    return DomProvider.#fileCollectors.get(tap)
+  }
+
+  /**
+   * Is this answer really an answer? See core/answer-integrity.mjs.
+   *
+   * Kept in one place because both extraction tiers need the same verdict,
+   * and because the previous copy-paste meant a fix to one path silently
+   * left the other wrong.
+   */
+  classifyAnswer(text) {
+    const verdict = classifyAnswer(text, {
+      patterns: errorPatterns(this.sel, this.settings),
+      maxChars: this.settings.errorNoticeMaxChars ?? 400,
+    })
+    if (verdict.error) {
+      this.log?.warn(`the UI answered with its own error message: "${String(text).trim().slice(0, 90)}"`)
+    } else if (verdict.suspected) {
+      this.log?.warn(
+        `this answer opens like a provider failure but matches no measured pattern, so it is ` +
+          `reported as SUSPECTED rather than treated as one: "${String(text).trim().slice(0, 90)}". ` +
+          `If it is a real failure notice, add its wording to providers.${this.id}.errorTextExtra.`
+      )
+    }
+    return verdict
+  }
+
   /**
    * Find, report and (safely) close the site's blocking notices.
    *
@@ -156,6 +192,16 @@ export class DomProvider extends Provider {
    * asking whether to delete a conversation. So a button is only ever
    * clicked when its own label matches `dismissText`; otherwise the only
    * gesture used is Escape, which cannot confirm anything.
+   *
+   * THIS IS NOT COSMETIC. ChatGPT's rate-limit modal sits in a `fixed
+   * inset-0 z-50` backdrop, so while it is up EVERY click is swallowed:
+   * Playwright reports "subtree intercepts pointer events" and a download
+   * click times out having sent no request at all. Two runs were spent
+   * blaming the download endpoint for that.
+   *
+   * The notice is still REPORTED rather than raised - on ChatGPT it locks
+   * history, not sending, so a request that otherwise worked must not be
+   * turned into a failure. Returns [{ kind, name, text }].
    */
   async dismissNotices(page) {
     const specs = this.sel.notices ?? []
@@ -178,7 +224,20 @@ export class DomProvider extends Provider {
 
       const text = ((await dialog.innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ').trim().slice(0, 240)
       if (!text) continue
-      found.push({ kind: classifyNotice(spec, text), name: spec.name ?? 'notice', text })
+      const kind = classifyNotice(spec, text)
+
+      // A TRANSIENT IS NOT A NOTICE. MEASURED 2026-09-08: clicking Gemini's
+      // Copy button - which this provider does on every turn, because it is
+      // how the original markdown is obtained - raises
+      // <mat-snack-bar-container> "Copied to clipboard", which this spec
+      // matched structurally. It has no buttons, blocks nothing, and vanishes
+      // in under 4s. Treating it as a notice reported a phantom to the
+      // caller, pressed Escape at the page (a real gesture, aimed at nothing),
+      // and then spent up to five seconds waiting for a toast to go away.
+      // Specs that can match a transient container say `reportUnknown: false`
+      // and are believed only when `classify` recognises the wording.
+      if (kind === 'unknown' && spec.reportUnknown === false) continue
+      found.push({ kind, name: spec.name ?? 'notice', text })
 
       let closed = false
       if (spec.dismiss) {
@@ -189,8 +248,10 @@ export class DomProvider extends Provider {
         }
       }
       // Escape is the fallback, not the first choice: a modal that ignores it
-      // would otherwise look dismissed and keep eating clicks.
-      if (!closed) await page.keyboard.press('Escape').catch(() => {})
+      // would otherwise look dismissed and keep eating clicks. A spec that
+      // describes something non-blocking opts out: pressing Escape at the
+      // page to chase a toast can close a menu the caller opened.
+      if (!closed && spec.escape !== false) await page.keyboard.press('Escape').catch(() => {})
       const gone = await waitFor(async () => ((await dialog.isVisible().catch(() => false)) ? null : true), {
         timeout: 5000,
         poll: this.settings.pollMs,
@@ -220,8 +281,12 @@ export class DomProvider extends Provider {
   async clickThrough(locator, { attempts = 3, timeout = 6000, what = 'a control' } = {}) {
     const page = locator.page()
     let last = null
+    // Any notice that was up while a click failed is a candidate explanation,
+    // not just a throttling one.
+    let blocking = null
     for (let i = 1; i <= attempts; i++) {
       const dismissed = await this.dismissNotices(page).catch(() => [])
+      blocking = dismissed[0] ?? blocking
       // Closing a modal re-renders the page underneath it. Clicking into
       // that re-render is how a click gets accepted and then ignored, so
       // give it a moment - but only when something was actually closed.
@@ -250,6 +315,27 @@ export class DomProvider extends Provider {
         this.log?.debug(`click on ${what} failed (attempt ${i})${covered ? ' - something is covering it' : ''}`)
       }
     }
+    // NAME THE REAL CAUSE. When one of the site's notices was up on any
+    // attempt, "locator.click: Timeout 10000ms exceeded" is a true statement
+    // about the wrong thing: the modal is dismissed, the app re-raises it,
+    // and the click never lands.
+    //
+    // IT IS NOT AN ACCOUNT LIMIT, and this used to say it was. ChatGPT's
+    // "Excesso de solicitações" modal is a data-protection measure that
+    // stops PREVIOUS CONVERSATIONS being served; it is dismissible, sending
+    // is unaffected, and you can carry on. Reporting it as HTTP 429 "wait a
+    // few minutes" told callers to back off from something they could simply
+    // click past - and made a transient overlay look like a quota.
+    if (blocking) {
+      throw new BridgeError(
+        `${this.id}: the site's "${blocking.name}" notice kept covering ${what} - it was dismissed on each of ` +
+          `${attempts} attempts and came straight back. It says: ${blocking.text.slice(0, 160)}` +
+          (blocking.kind === 'rate_limit'
+            ? '. This notice restricts access to previous conversations, not sending, so a retry usually succeeds.'
+            : ''),
+        { status: 503, code: 'notice_blocking', retryable: true, detail: { notice: blocking.text.slice(0, 240), kind: blocking.kind, control: what } }
+      )
+    }
     throw last
   }
 
@@ -273,7 +359,7 @@ export class DomProvider extends Provider {
     } catch {
       await page.goto(this.settings.url, { waitUntil: 'domcontentloaded' })
     }
-    await page.locator(s.composer).first().waitFor({ state: 'visible', timeout: 30000 })
+    await this.requireComposer(page, { timeout: 30000, where: 'on a new conversation' })
     await waitFor(fresh, { timeout: 10000, poll: this.settings.pollMs, what: 'a verified empty conversation' })
   }
 
@@ -283,8 +369,13 @@ export class DomProvider extends Provider {
       throw new BridgeError(`${this.id}: invalid provider thread id`, { status: 400, code: 'invalid_request' })
     }
     const url = new URL(spec.urlTemplate.replace('{id}', threadId), this.origin).href
+    // ARM BEFORE NAVIGATING. Opening a conversation is itself what makes the
+    // app fetch that conversation's generated files, so a collector installed
+    // after this line would be installed after the only copy of the bytes
+    // went past. Idempotent: one collector per tab.
+    this.fileBytes(await WireTap.attach(page))
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.locator(this.sel.composer).first().waitFor({ state: 'visible', timeout: this.settings.readyTimeoutMs })
+    await this.requireComposer(page, { timeout: this.settings.readyTimeoutMs, where: `opening thread ${threadId}` })
 
     // VERIFY WE ARE STILL IN THE THREAD. Navigating and finding a composer is
     // not the same as arriving: measured on ChatGPT, a /c/<id> load can land
@@ -298,8 +389,13 @@ export class DomProvider extends Provider {
       const blocked = notices.map((n) => n.text).join(' | ')
       throw new BridgeError(
         `${this.id}: thread ${threadId} did not open - the site left us on ` +
-          `${landed ? `thread ${landed}` : 'a new, empty chat'}` +
-          (blocked ? `. It is showing: ${blocked}` : '. Nothing was sent.'),
+          `${landed ? `thread ${landed}` : 'a new, empty chat'}. Nothing was sent.` +
+          // The guarantee comes FIRST and unconditionally. It used to be the
+          // else-branch of the notice text, so exactly when something was
+          // covering the page - the case where a caller most needs to know
+          // whether their prompt went out - the one reassuring fact was
+          // dropped.
+          (blocked ? ` The site is showing: ${blocked}` : ''),
         { status: 503, code: 'thread_unavailable', retryable: true, detail: { thread_id: threadId, landed, notices } }
       )
     }
@@ -359,12 +455,25 @@ export class DomProvider extends Provider {
   async downloadThreadFiles(page, messages, { onFile } = {}) {
     const g = this.sel.generatedFile
     const contract = this.sel.thread?.export
-    if (!g?.control || !contract?.idAttr) return { files: [], skipped: 'this provider has no measured download control' }
+    // TWO SHAPES OF DOWNLOAD CONTROL, both measured, both supported.
+    //   - ChatGPT: one button per file, inside the message (g.control).
+    //   - Gemini: a <generated-file> chip that opens a viewer overlay whose
+    //     toolbar holds the real download (g.chip + g.open + g.download).
+    // Only the first was implemented here, so `export --files` on Gemini
+    // answered "this provider has no measured download control" for threads
+    // whose files download perfectly well at the time the answer arrives.
+    // The viewer flow already exists for the live path; it just needed to be
+    // pointed at a message scrolled back into view instead of the newest one.
+    const viewerFlow = !g?.control && !!(g?.chip && g?.download)
+    if (!contract?.idAttr || (!g?.control && !viewerFlow)) {
+      return { files: [], skipped: 'this provider has no measured download control' }
+    }
 
     const wanted = messages.filter((m) => m.file_controls?.length && m.id)
     if (!wanted.length) return { files: [] }
 
     const tap = await WireTap.attach(page)
+    const standing = this.fileBytes(tap)
     const taken = new Set()
     const files = []
     for (const message of wanted) {
@@ -379,6 +488,28 @@ export class DomProvider extends Provider {
         continue
       }
       const host = page.locator(selector).first()
+      if (viewerFlow) {
+        // The same routine the live path uses, scoped to this old message.
+        // Scope to the whole MESSAGE, not to its text node. `selector` targets
+        // the element carrying the id (Gemini: message-content), while the
+        // chip and the tool marker that gates it live on the message root
+        // above it - so a scope of `host` found neither and returned nothing.
+        const whole = contract.messageNode
+          ? page.locator(contract.messageNode).filter({ has: page.locator(selector) }).first()
+          : host
+        const got = await downloadGeneratedFiles(page, g, {
+          scope: whole,
+          dir: this.settings.downloadDir,
+          waitMs: this.settings.fileWaitMs,
+          pollMs: this.settings.pollMs,
+          log: this.log,
+        }).catch((e) => [{ name: message.file_controls[0] ?? 'download.bin', error: e.message.split('\n')[0] }])
+        for (const f of got) {
+          files.push({ ...f, message_id: message.id })
+          if (!f.error) onFile?.(f)
+        }
+        continue
+      }
       const controls = host.locator(g.control)
       const count = await controls.count().catch(() => 0)
       for (let i = 0; i < message.file_controls.length; i++) {
@@ -398,6 +529,8 @@ export class DomProvider extends Provider {
               timeoutMs: this.settings.fileWaitMs,
               fallbackName,
               taken,
+              standing,
+              progressed: previewProgressed(page, g),
               log: this.log,
             }
           )
@@ -522,7 +655,10 @@ export class DomProvider extends Provider {
   async openPicker(page) {
     const s = this.sel
     await this.requireContract(page, 'modelPicker', s.modelPicker)
-    await page.locator(s.modelPicker).first().click({ timeout: 10000 })
+    // Through any notice: the site's rate-limit modal covers the picker as
+    // readily as it covers the composer, and a bare click on it reports a
+    // 10s timeout instead of the lock that caused it.
+    await this.clickThrough(page.locator(s.modelPicker).first(), { timeout: 10000, what: 'the model picker' })
     await waitFor(() => count(page, s.modelOption), { timeout: 8000, what: 'the model menu to open' })
   }
 
@@ -539,7 +675,24 @@ export class DomProvider extends Provider {
     // than once rather than reporting failure on the first miss.
     const attempts = this.settings.modelSelectAttempts ?? 3
     for (let i = 1; i <= attempts; i++) {
-      await this.openPicker(page)
+      // NOT BEING THERE YET IS NOT THE SAME AS BEING GONE. openPicker calls
+      // requireContract, which throws ui_contract ("the UI has changed") the
+      // moment the picker is not matched inside its 8s budget - and that
+      // throw used to escape this loop, so a picker that was merely late on a
+      // freshly opened tab killed the whole request. Measured 2026-09-09
+      // against the live site: one `ask --model=gemini-pro` died on it while
+      // the very next identical call succeeded. This loop exists precisely
+      // for picker flakiness, so a late picker is retried like any other
+      // miss; only the final attempt is allowed to report a changed UI.
+      try {
+        await this.openPicker(page)
+      } catch (e) {
+        if (i === attempts) throw e
+        this.log?.debug(`the model picker was not ready (attempt ${i}/${attempts}): ${e.message}`)
+        await page.keyboard.press('Escape').catch(() => {})
+        await sleep(1000)
+        continue
+      }
       const option = page.locator(this.sel.modelOption).filter({ hasText: new RegExp(spec.match) }).first()
       if (!(await option.count().catch(() => 0))) {
         await page.keyboard.press('Escape').catch(() => {})
@@ -559,7 +712,7 @@ export class DomProvider extends Provider {
           note: 'already active (option disabled)',
         }
       }
-      await option.click({ timeout: 10000 })
+      await this.clickThrough(option, { timeout: 10000, what: `the ${modelId} option` })
 
       // Verify from the UI instead of trusting the click. A picker can accept
       // a click and not change, and a research record needs the model that
@@ -642,7 +795,7 @@ export class DomProvider extends Provider {
     const uploadPattern = this.sel.wire?.upload
     const uploads = uploadPattern ? (await WireTap.attach(page)).collect(uploadPattern) : null
     try {
-      if (how === 'cdp-drag') await this.#attachByDrag(page, files)
+      if (how === 'cdp-drag') await this.#dropUntilRegistered(page, files)
       else if (how === 'file-input') await this.#attachByInput(page, files)
       else if (how === 'file-chooser') await this.#attachByChooser(page, files)
       else throw new ContractError(this.id, 'attachStrategy', how)
@@ -679,17 +832,66 @@ export class DomProvider extends Provider {
    */
   async #attachByDrag(page, files) {
     const target = page.locator(this.sel.dropTarget).first()
-    const box = await target.boundingBox()
+    await target.scrollIntoViewIfNeeded().catch(() => {})
+    // WAIT FOR THE COMPOSER TO STOP MOVING. The drop happens right after a
+    // new conversation is created, which re-renders the input area; a drop
+    // dispatched into that render reaches a zone whose handler is not bound
+    // yet and is silently discarded. Measured 2026-09-09: from a settled page
+    // the first drop landed every time, while in the product - where the
+    // composer had just been rebuilt - five attempts in six needed the
+    // retry. Two identical geometry readings are enough to say it has
+    // settled, and it costs a few hundred milliseconds, not a fixed sleep.
+    const box = await waitStable(
+      async () => JSON.stringify(await target.boundingBox()),
+      { checks: 2, poll: 120, timeout: 8000, accept: (v) => v && v !== 'null', what: 'the drop target to stop moving' }
+    ).then(JSON.parse).catch(() => target.boundingBox())
     if (!box) throw new ContractError(this.id, 'dropTarget', this.sel.dropTarget)
     const client = await cdp(page)
     const data = { items: [], files: files.map((f) => resolvePath(f)), dragOperationsMask: 1 }
-    for (const type of ['dragEnter', 'dragOver', 'drop']) {
+    // PACE THE SEQUENCE. Fired back to back, the three events can all arrive
+    // inside one frame; the app's drop zone is activated by dragenter and its
+    // drop handler is bound in the render that follows, so the drop lands on
+    // a zone that is not listening yet and NOTHING happens - no chip, no
+    // request, no error. Measured 2026-09-08: this dropped roughly one
+    // attachment in three on Gemini. The extra dragOver is what a real mouse
+    // would produce anyway.
+    for (const type of ['dragEnter', 'dragOver', 'dragOver', 'drop']) {
       await client.send('Input.dispatchDragEvent', {
         type,
         x: box.x + box.width / 2,
         y: box.y + box.height / 2,
         data,
       })
+      await sleep(80)
+    }
+  }
+
+  /**
+   * Drop the files, and CHECK that the page took them.
+   *
+   * A dispatched drag is fire-and-forget: nothing in the protocol says the
+   * page reacted. Measured on Gemini, roughly one attempt in three left no
+   * chip at all, and the request then failed 180s later against a composer
+   * that had never seen the file.
+   *
+   * Only a drop that produced NOTHING is repeated. A partial result is left
+   * alone deliberately: re-dropping on top of a chip that did register would
+   * attach the same evidence file twice, and a duplicated exhibit in a
+   * systematic review is worse than a clean failure.
+   */
+  async #dropUntilRegistered(page, files, attempts = 3) {
+    const chip = this.sel.attachmentChip
+    const chips = async () => (chip ? await count(page, chip) : files.length)
+    for (let i = 1; i <= attempts; i++) {
+      await this.#attachByDrag(page, files)
+      if (!chip) return
+      const landed = await waitFor(async () => ((await chips()) > 0 ? true : null), {
+        timeout: 10000,
+        poll: this.settings.pollMs,
+        what: 'the dropped file to appear in the composer',
+      }).catch(() => false)
+      if (landed) return
+      if (i < attempts) this.log?.warn(`the drop did not register with the page; dispatching it again (${i}/${attempts})`)
     }
   }
 
@@ -720,20 +922,43 @@ export class DomProvider extends Provider {
     const s = this.sel
     if (!s.attachmentChip) return
     const uploading = s.uploadingText ? new RegExp(s.uploadingText, 'i') : null
-    await waitFor(
-      async () => {
-        if ((await count(page, s.attachmentChip)) < n) return null
-        if (!uploading) return true
-        const scope = s.dropTarget ?? 'body'
-        const text = await page.locator(scope).first().innerText().catch(() => '')
-        return uploading.test(text) ? null : true
-      },
-      {
-        timeout: this.settings.uploadTimeoutMs,
-        poll: this.settings.pollMs,
-        what: `${n} attachment(s) to finish uploading`,
-      }
-    )
+    // SAY WHAT WAS SEEN, NOT JUST THAT TIME RAN OUT. There are two very
+    // different failures behind "waiting for 1 attachment(s)": the file never
+    // reached the page at all (no chip - the trusted drag did not land), or
+    // it reached it and the site is still working (chip present, "Uploading
+    // file" still on screen). The first is ours to retry differently; the
+    // second is the site being slow. The old message could not tell them
+    // apart, and neither could anyone reading the log.
+    let chips = 0
+    let stillUploading = false
+    try {
+      await waitFor(
+        async () => {
+          chips = await count(page, s.attachmentChip)
+          if (chips < n) return null
+          if (!uploading) return true
+          const scope = s.dropTarget ?? 'body'
+          const text = await page.locator(scope).first().innerText().catch(() => '')
+          stillUploading = uploading.test(text)
+          return stillUploading ? null : true
+        },
+        {
+          timeout: this.settings.uploadTimeoutMs,
+          poll: this.settings.pollMs,
+          what: `${n} attachment(s) to finish uploading`,
+        }
+      )
+    } catch (err) {
+      const seen = chips >= n
+        ? `the file is attached but the site is still uploading it after ${Math.round(this.settings.uploadTimeoutMs / 1000)}s`
+        : `only ${chips} of ${n} attachment(s) ever appeared in the composer - the file never reached the page`
+      throw new BridgeError(`${this.id}: ${seen}. Nothing was sent.`, {
+        status: 504,
+        code: chips >= n ? 'upload_slow' : 'upload_not_registered',
+        retryable: true,
+        detail: { chips, expected: n, still_uploading: stillUploading },
+      })
+    }
     this.log?.debug(`${n} attachment(s) registered`)
   }
 
@@ -759,6 +984,11 @@ export class DomProvider extends Provider {
     // can only see the next request. It also gives a stronger proof of
     // submission than an emptied composer: the request actually went out.
     if (this.wired) ctx.wire = (await WireTap.attach(page)).expect(s.wire.answer)
+
+    // Same reasoning for a file the answer is about to produce: the app may
+    // fetch it while the turn is still rendering, long before anything asks
+    // for it. Arming here costs one CDP subscription per tab.
+    this.fileBytes(await WireTap.attach(page))
 
     const fire = async () => {
       if (s.submitKey) return composer.press(s.submitKey)
@@ -1016,11 +1246,7 @@ export class DomProvider extends Provider {
     // fatal, worth retrying, or simply logged is the caller's policy, not
     // ours. It is flagged so that policy can be written without regex-ing
     // the text downstream.
-    const providerError =
-      !!s.errorText && new RegExp(s.errorText, 'i').test(text) && text.length < 400
-    if (providerError) {
-      this.log?.warn(`the UI answered with its own error message: "${text.trim().slice(0, 90)}"`)
-    }
+    const integrity = this.classifyAnswer(text)
 
     const files = await this.generatedFiles(page, ctx, text)
 
@@ -1037,7 +1263,11 @@ export class DomProvider extends Provider {
       extraction_warning: copied ? null : copyDiagnostics,
       // The text is the provider's own error notice rather than an answer.
       // Delivered anyway; the caller decides what that means.
-      provider_error: providerError,
+      provider_error: integrity.error,
+      // A short answer that OPENS like a first-person failure but matches no
+      // measured pattern. Not a verdict - see core/answer-integrity.mjs.
+      provider_error_suspected: integrity.suspected,
+      provider_error_match: integrity.matched ?? integrity.suspected_by ?? null,
       tables: parseTables(text),
       code_blocks: parseCodeBlocks(text),
       files,
@@ -1078,14 +1308,17 @@ export class DomProvider extends Provider {
     const s = this.sel
     const { res, decoded } = ctx.wireResult
     const text = decoded.text
-    const providerError = !!s.errorText && new RegExp(s.errorText, 'i').test(text) && text.length < 400
-    if (providerError) this.log?.warn(`the site answered with its own error message: "${text.trim().slice(0, 90)}"`)
+    const integrity = this.classifyAnswer(text)
     return {
       text,
       extraction: 'wire',
       markdown: true,
       lossy_math: false,
-      provider_error: providerError,
+      provider_error: integrity.error,
+      // A short answer that OPENS like a first-person failure but matches no
+      // measured pattern. Not a verdict - see core/answer-integrity.mjs.
+      provider_error_suspected: integrity.suspected,
+      provider_error_match: integrity.matched ?? integrity.suspected_by ?? null,
       tables: parseTables(text),
       code_blocks: parseCodeBlocks(text),
       files: await this.generatedFiles(page, ctx, text),
@@ -1175,6 +1408,100 @@ export class DomProvider extends Provider {
    * that sent me hunting for three phantom selector bugs in the prototype.
    * So a contract violation means "absent even after waiting".
    */
+  /**
+   * Wait for the composer, and SAY WHAT WENT WRONG if it never comes.
+   *
+   * `locator.waitFor: Timeout 60000ms exceeded` is a true sentence that
+   * names neither the thing being waited for, the page it was waited on, nor
+   * the notice that was covering it. Measured 2026-09-09: two live failures
+   * reported exactly that and nothing else, and diagnosing them meant
+   * reading the source to find out which of several 30s/60s waits had fired.
+   *
+   * The evidence is gathered only on failure, so the happy path costs
+   * nothing.
+   */
+  async requireComposer(page, { timeout, where }) {
+    try {
+      await page.locator(this.sel.composer).first().waitFor({ state: 'visible', timeout })
+      return
+    } catch {
+      /* fall through and find out why */
+    }
+    if (await this.#recoverUnhydrated(page)) return
+    const notices = await this.dismissNotices(page).catch(() => [])
+    // A notice can be what was covering it. Now that it is dismissed, the
+    // composer may simply be there - so ask once more before giving up.
+    if (notices.length) {
+      const ok = await page.locator(this.sel.composer).first().waitFor({ state: 'visible', timeout: 10000 }).then(() => true).catch(() => false)
+      if (ok) {
+        this.log?.debug(`the composer was behind the site's "${notices.map((n) => n.name).join(', ')}" notice; continuing`)
+        return
+      }
+    }
+    await this.assertNoChallenge(page)
+    // page.url() is SYNCHRONOUS and returns a string. Awaiting a .catch on
+    // it threw "page.url(...).catch is not a function" - inside the very
+    // path that exists to explain a failure, so a clean 504
+    // composer_unavailable was replaced by an untyped 500 internal.
+    const url = page.url()
+    const blocked = notices.map((n) => `${n.kind}: ${n.text}`).join(' | ')
+    throw new BridgeError(
+      `${this.id}: the composer never became usable ${where} after ${Math.round(timeout / 1000)}s` +
+        (blocked ? `. The site is showing - ${blocked}` : '.') +
+        ` (page: ${url})`,
+      {
+        status: 504,
+        code: 'composer_unavailable',
+        retryable: true,
+        detail: { where, url, notices, selector: this.sel.composer },
+      }
+    )
+  }
+
+  /**
+   * The app never started. Restart it rather than reporting a timeout.
+   *
+   * MEASURED on ChatGPT 2026-09-09. A provider can serve a no-JS fallback
+   * control that is a perfectly ordinary, visible, typable element - here a
+   * `textarea[name=prompt-textarea]` - while the real editor never mounts.
+   * Typing into it does nothing: the send button stays disabled, because the
+   * application it belongs to is not running. Waiting longer cannot help,
+   * and the symptom we reported was a 30-second timeout on a selector.
+   *
+   * The trigger is a race in the browser launch: with the window parked off
+   * the desktop, Chrome sometimes composites no frame, and an editor that
+   * mounts from a frame callback never mounts. So the ladder is: reload
+   * (cheap, usually enough); then reload with the window briefly on the
+   * desktop, which is the condition the app is waiting for. Both are gated
+   * on the fallback being visible, so a provider that never drifts this way
+   * pays nothing.
+   */
+  async #recoverUnhydrated(page) {
+    const fallback = this.sel.unhydratedComposer
+    if (!fallback) return false
+    const stuck = async () =>
+      (await count(page, fallback)) > 0 && (await count(page, this.sel.composer)) === 0
+    if (!(await stuck().catch(() => false))) return false
+
+    const mounted = async (ms) =>
+      page.locator(this.sel.composer).first().waitFor({ state: 'visible', timeout: ms }).then(() => true).catch(() => false)
+
+    this.log?.warn(
+      `${this.id} served its no-JS fallback composer and never started the app - ` +
+        'reloading rather than waiting for an editor that will not appear'
+    )
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+    if (await mounted(20000)) return true
+
+    this.log?.warn('still not started; bringing the window onto the desktop briefly so the page can render a frame')
+    const recovered = await nudgeOnScreen(page, async () => {
+      await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+      return mounted(30000)
+    }).catch(() => false)
+    if (recovered) this.log?.info('the app started once the window was on the desktop; the window has been parked again')
+    return recovered
+  }
+
   async requireContract(page, key, sel, timeout = 8000) {
     if (!sel) throw new ContractError(this.id, key, '(unset)')
     try {

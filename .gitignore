@@ -23,16 +23,16 @@ testdata/capture/
 # never something to commit.
 testdata/recon/
 
-# scratch
-_*.mjs
+# SCRATCH AT THE REPO ROOT. Debug dumps land here constantly while measuring
+# a UI - CLI stdout/stderr, DOM fragments, one-off JSON. The pattern is
+# anchored with a leading slash so it covers the root only: `examples/_client.py`
+# is real, tracked source and must not be swept up by this.
+# Previously this was a list of extensions and it kept missing new ones
+# (_c.out, _control.html both had to be deleted by hand).
+/_*
 
 # Ad-hoc export/run outputs from live acceptance runs.
 cexp*.json
 gexp*.json
 testdata/cexp4.json
-
-# scratch run outputs
-_*.json
-_*.err
-_*.log
 .msg.tmp

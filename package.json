@@ -22,10 +22,10 @@
     "login": "node bin/uibridge.mjs login",
     "doctor": "node bin/uibridge.mjs doctor",
     "capture": "node bin/uibridge.mjs capture",
-    "test": "node --test test/unit.mjs test/pool.mjs test/window.mjs test/api.mjs test/session.mjs test/reliability.mjs test/report-regressions.mjs",
+    "test": "node --test test/unit.mjs test/pool.mjs test/window.mjs test/api.mjs test/session.mjs test/reliability.mjs test/report-regressions.mjs test/api-conformance.mjs test/cli.mjs",
     "test:acceptance": "node test/acceptance.mjs",
-    "test:live": "python test/live.py",
-    "serve:headed": "node bin/uibridge.mjs serve --headed"
+    "serve:headed": "node bin/uibridge.mjs serve --headed",
+    "certify": "node test/certify.mjs"
   },
   "engines": {
     "node": ">=22"

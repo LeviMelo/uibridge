@@ -1,26 +1,116 @@
 {
-  "port": 8477,
+  "_": [
+    "Every setting uibridge has, at its default value. Copy this to",
+    "config.json and delete the lines you do not want to change - an omitted",
+    "key uses the default shown here, so a short file is the normal case.",
+    "",
+    "Keys beginning with _ are ignored, so you can leave notes. Any OTHER key",
+    "this build does not recognise is a startup error, naming the key and the",
+    "nearest match: a misspelled setting that changed nothing silently is a",
+    "worse outcome than a config that will not load.",
+    "",
+    "Paths are relative to the state directory (`uibridge paths` prints it)."
+  ],
+
   "host": "127.0.0.1",
+  "port": 8477,
+  "_port": "The daemon and the OpenAI-compatible API. Give a second uibridge on the same machine its own port.",
+
   "defaultProvider": "gemini",
+  "basePort": 9333,
+  "_basePort": "First Chrome remote-debugging port; each provider takes the next one. Change if something else on this machine uses 9333.",
+
   "headless": "offscreen",
+  "_headless": [
+    "How the browser is shown, for everything except signing in (that always",
+    "opens a real visible window - it is a human action).",
+    "  true        a true headless browser",
+    "  \"offscreen\" a real browser parked off the visible desktop (default)",
+    "  false       a visible window you can watch",
+    "MEASURED: ChatGPT serves an ANONYMOUS session to true headless even with",
+    "valid cookies, so its block below pins \"offscreen\". Gemini is fine",
+    "headless. `uibridge serve --headed` overrides for one run."
+  ],
+
   "profileDir": ".profiles",
+  "_profileDir": "Chrome profiles, one per provider. Your logins live here. Never commit it.",
   "downloadDir": "downloads",
+  "ledgerDir": ".uibridge/threads",
+  "_ledgerDir": "Per-thread JSONL: what was sent, what came back, file hashes.",
+  "exportDir": ".uibridge/exports",
   "requestDir": ".uibridge/requests",
+  "_requestDir": "Durable request records, keyed by Idempotency-Key.",
+
   "maxPendingRequests": 64,
   "requestTimeoutMs": 900000,
+  "_requestTimeoutMs": "Whole-request budget at the API layer, above the per-phase timeouts below.",
+
   "provider": {
+    "_": "Applies to every provider. The per-provider blocks below override it.",
+
     "concurrency": 2,
-    "strictModel": true,
+    "_concurrency": "Tabs driven at once for this provider. Raising it does not raise the site's own limits.",
+    "minIntervalMs": 0,
+    "_minIntervalMs": "Minimum spacing between request STARTS, across all tabs. Fresh conversations are what trips these sites' throttling, and a batch pipeline is exactly the caller that would burst. Set per provider below.",
+    "continuationIntervalMs": 0,
+    "_continuationIntervalMs": "Spacing for follow-ups in an existing thread. 0 because a continuation creates no new conversation.",
+    "newChatPerRequest": true,
+    "_newChatPerRequest": "A fresh conversation per request: no shared context, and the model choice actually applies (switching mid-thread is unreliable). Pass thread_id to continue instead.",
+
     "maxComposerChars": 32000,
+    "_maxComposerChars": "Above this the prompt is sent as a temporary UTF-8 attachment instead of typed, because large pastes truncate or stall the editor.",
+
+    "readyTimeoutMs": 60000,
+    "submitAckMs": 60000,
+    "_submitAckMs": "How long to wait for a turn to appear after sending. Short on purpose: a prompt that never went out should fail in a minute, not sit for the full response budget.",
     "responseTimeoutMs": 600000,
-    "pollMs": 150
+    "_responseTimeoutMs": "A thinking model can take minutes. This is the ceiling for one answer.",
+    "historyBaselineMs": 8000,
+    "historyTimeoutMs": 60000,
+    "_threadResumeMs": "how long a requested thread has to appear in the URL after we navigate to it; nothing is sent until it does",
+    "threadResumeMs": 10000,
+    "uploadTimeoutMs": 180000,
+    "fileWaitMs": 20000,
+    "_fileWaitMs": "Budget for retrieving one generated file once the page has been asked for it.",
+    "pollMs": 150,
+    "settleChecks": 5,
+    "_settleChecks": "Consecutive identical reads that mean 'the answer has stopped growing'. A measurement of stability, not padding.",
+
+    "modelSelectAttempts": 3,
+    "strictModel": true,
+    "_strictModel": [
+      "true  a model that could not be verified is an error (502). Use this",
+      "      when provenance matters more than getting an answer: a review",
+      "      must not attribute a row to a model that did not write it.",
+      "false the request proceeds and is recorded as unverified, which is",
+      "      what an OpenAI-shaped client expects."
+    ],
+
+    "errorTextExtra": [],
+    "_errorTextExtra": "Extra provider failure wordings, as regex source strings. A provider can change its error text at any time and you will meet the new one before we do; adding it here needs no code change. See core/answer-integrity.mjs.",
+    "failOnSuspectedProviderError": false,
+    "_failOnSuspectedProviderError": "Turn a SUSPECTED failure (an answer that opens like an apology but matches no measured pattern) into a 502 instead of a flag. Off by default: a terse refusal can be legitimate content. On for pipelines that would rather lose a row than record a bad one.",
+    "errorNoticeMaxChars": 400,
+    "_errorNoticeMaxChars": "Longer text that merely contains an apology is an answer, not a failure notice."
   },
+
   "providers": {
+    "_": "Per provider. Anything from `provider` above is valid here too, plus url and debugPort.",
     "gemini": {
-      "headless": true
+      "headless": true,
+      "minIntervalMs": 8000,
+      "concurrency": 2,
+      "settleChecks": 5,
+      "_settleChecks": "Gemini streams in bursts with visible pauses; fewer checks ends a read inside one of them.",
+      "_url": "The site address. Defaults to the measured one in the provider's selectors.json - only set it for a regional domain or a local stand-in, and expect selectors to need re-measuring."
     },
     "chatgpt": {
-      "headless": "offscreen"
+      "headless": "offscreen",
+      "_headless": "MEASURED: true headless gets an anonymous session here even with valid cookies.",
+      "minIntervalMs": 20000,
+      "_minIntervalMs": "ChatGPT locks access to your conversations after a burst of new chats. Twenty seconds is what kept this account out of that lock.",
+      "concurrency": 1,
+      "settleChecks": 4
     }
   }
 }
