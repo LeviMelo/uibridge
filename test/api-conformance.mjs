@@ -16,6 +16,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import OpenAI from 'openai'
+import { existsSync, statSync } from 'node:fs'
 import { startEchoServer } from './support/echo.mjs'
 
 const server = await startEchoServer()
@@ -121,14 +122,27 @@ test('every stream id is stable and the SSE framing is correct on the wire', asy
   assert.ok(body.includes('\n\n'), 'frames are separated by a blank line')
 })
 
-test('a streamed provider failure still ends the stream cleanly', async () => {
-  // A client that never sees [DONE] hangs until its own timeout.
+test('a failure BEFORE the first byte is a typed JSON error, not a 200 SSE envelope', async () => {
+  // `stream: true` does not commit the response to being a stream. This
+  // failure is raised in the provider before any byte exists, so the status
+  // line is still ours to choose, and the honest choice is the ordinary typed
+  // error a non-streaming caller would get - not a 200 carrying an error
+  // frame, which tells every SDK the request succeeded.
+  //
+  // (The mid-stream case, where 200 has already been sent and an error frame
+  // IS the only honest option left, is the separate test below.)
   const res = await post('/v1/chat/completions', {
     model: MODEL, stream: true,
     messages: [{ role: 'user', content: '@@throw=ui_contract @@status=502' }],
   })
-  const body = await res.text()
-  assert.ok(body.includes('data: [DONE]') || /"error"/.test(body), 'the stream is terminated rather than left open')
+  assert.equal(res.status, 502, 'the failure is in the status line, where a client looks first')
+  assert.match(res.headers.get('content-type'), /application\/json/)
+  assert.doesNotMatch(res.headers.get('content-type'), /text\/event-stream/,
+    'nothing was streamed, so it must not claim to be a stream')
+  const body = JSON.parse(await res.text())
+  assert.equal(body.error.type, 'ui_contract')
+  assert.equal(body.error.retryable, false)
+  assert.equal(res.headers.get('x-should-retry'), 'false')
 })
 
 // --- request handling -------------------------------------------------------
@@ -423,6 +437,52 @@ test('models.retrieve() of a model we do not serve is a typed 404', async () => 
   const body = await res.json()
   assert.equal(body.error.type, 'model_not_found')
   assert.match(body.error.message, /Known:/, 'it says what it does serve')
+})
+
+// --- the envelope's derived fields, offline ---------------------------------
+//
+// These four fields are the ones a caller reads INSTEAD of re-parsing the
+// answer, so they are exactly the ones that must not quietly go missing. The
+// scripted provider has carried directives for producing each of them from
+// the start, and nothing had ever asserted on them - the fields were only
+// ever exercised live, against a paid subscription, where a failure is as
+// likely to be the site as the code.
+
+test('a generated file is reported with a real path and real bytes', async () => {
+  const r = await client.chat.completions.create({
+    model: MODEL, messages: [{ role: 'user', content: '@@file=probe.csv make me a file' }],
+  })
+  const file = r._uibridge.files[0]
+  assert.ok(file, 'the file is named in the envelope')
+  assert.equal(file.name, 'probe.csv')
+  assert.ok(existsSync(file.path), 'and the path it reports actually exists')
+  assert.equal(statSync(file.path).size, file.bytes, 'and the byte count is the file, not a guess')
+})
+
+test('a table is parsed alongside the text, never instead of it', async () => {
+  const r = await client.chat.completions.create({
+    model: MODEL, messages: [{ role: 'user', content: '@@table give me a table' }],
+  })
+  assert.equal(r._uibridge.tables.length, 1)
+  assert.deepEqual(r._uibridge.tables[0].header, ['a', 'b'])
+  assert.match(r.choices[0].message.content, /\| a \| b \|/, 'the original markdown is still the answer')
+})
+
+test('a code block is reported with its language', async () => {
+  const r = await client.chat.completions.create({
+    model: MODEL, messages: [{ role: 'user', content: '@@code write some python' }],
+  })
+  assert.equal(r._uibridge.code_blocks[0].language, 'python')
+  assert.match(r.choices[0].message.content, /```python/, 'and the fence survives in the text')
+})
+
+test('sources are reported, and so is the fact that the provider browsed', async () => {
+  const r = await client.chat.completions.create({
+    model: MODEL, messages: [{ role: 'user', content: '@@sources look it up' }],
+  })
+  assert.equal(r._uibridge.sources.length, 1)
+  assert.equal(r._uibridge.browsed, true)
+  assert.equal(r._uibridge.searched, true)
 })
 
 // --- the daemon has to survive whatever is pointed at it ---------------------

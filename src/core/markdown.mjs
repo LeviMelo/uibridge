@@ -100,7 +100,16 @@ export function extractJSON(text) {
   }
 }
 
-/** Inline LaTeX/display maths, so a caller can check fidelity or re-render. */
+/**
+ * Inline LaTeX/display maths, so a caller can check fidelity or re-render.
+ *
+ * DELIBERATELY NOT IN THE ENVELOPE. `tables`, `code_blocks` and `citations`
+ * are derived onto every answer; maths is not, because adding a `math` array
+ * to the response is a product decision nobody has asked for. This is offered
+ * to callers and tools that want it, and it is covered by unit tests so it
+ * cannot rot. Noted here so the next reviewer does not re-file it as dead
+ * code - it has been looked at, and this is the answer.
+ */
 export function parseMath(md) {
   const out = []
   const display = /\$\$([^]*?)\$\$|\\\[([^]*?)\\\]/g

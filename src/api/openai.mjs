@@ -60,7 +60,10 @@ export function readModes(body) {
 }
 
 export function readThreadId(body) {
-  const value = body.thread_id ?? body._uibridge?.thread_id ?? null
+  // `threadId` too: three sibling routes accepted three different
+  // spellings of the same field, so a caller that worked against one
+  // endpoint silently started a new conversation on another.
+  const value = body.thread_id ?? body.threadId ?? body._uibridge?.thread_id ?? null
   if (value !== null && typeof value !== 'string') throw new RequestError('thread_id must be a string')
   if (value !== null && !/^[A-Za-z0-9_-]+$/.test(value)) throw new RequestError('thread_id must be a non-empty native identifier')
   return value

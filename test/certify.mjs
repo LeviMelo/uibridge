@@ -147,7 +147,7 @@ await scoped('CLI: discovery, state and refusals (no provider work)', async () =
   check('models lists ids one per line', modelsTxt.code === 0 && modelsTxt.stdout.trim().split(NL).length > 1, `${modelsTxt.stdout.trim().split(NL).length} ids`)
   check('models --json is a parseable array', Array.isArray(firstJSON(modelsJson.stdout)), `${firstJSON(modelsJson.stdout).length} entries`)
   check('paths --json parses', typeof firstJSON(paths.stdout) === 'object', JSON.stringify(Object.keys(firstJSON(paths.stdout))).slice(0, 90))
-  check('profiles --json parses', profiles.code === 0)
+  check('profiles --json parses', Array.isArray(firstJSON(profiles.stdout)) && profiles.code === 0)
   check('an unknown flag is refused, not swept into the prompt', badFlag.code === 1 && /tempreature/.test(badFlag.out))
   check('an unknown provider is refused with the known list', badProvider.code === 1 && /Known:/.test(badProvider.out))
 })

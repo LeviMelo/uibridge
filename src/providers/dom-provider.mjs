@@ -1399,15 +1399,6 @@ export class DomProvider extends Provider {
   }
 
   /**
-   * Assert a selector still matches - but WAIT before concluding it does not.
-   *
-   * count() does not auto-wait. Reading it the instant a fresh conversation
-   * renders reports zero for controls that are merely a few frames late, and
-   * that misreads a timing race as "the UI changed" - the exact confusion
-   * that sent me hunting for three phantom selector bugs in the prototype.
-   * So a contract violation means "absent even after waiting".
-   */
-  /**
    * Wait for the composer, and SAY WHAT WENT WRONG if it never comes.
    *
    * `locator.waitFor: Timeout 60000ms exceeded` is a true sentence that
@@ -1501,6 +1492,15 @@ export class DomProvider extends Provider {
     return recovered
   }
 
+  /**
+   * Assert a selector still matches - but WAIT before concluding it does not.
+   *
+   * count() does not auto-wait. Reading it the instant a fresh conversation
+   * renders reports zero for controls that are merely a few frames late, and
+   * that misreads a timing race as "the UI changed" - the exact confusion
+   * that sent me hunting for three phantom selector bugs in the prototype.
+   * So a contract violation means "absent even after waiting".
+   */
   async requireContract(page, key, sel, timeout = 8000) {
     if (!sel) throw new ContractError(this.id, key, '(unset)')
     try {

@@ -60,7 +60,12 @@ export async function captureDownload(page, click, { dir, timeout = 30000 } = {}
       try { copyFileSync(source, path) } catch (err) {
         try { unlinkSync(path) } catch {}
         throw new BridgeError('Could not save the completed browser download', {
-          status: 502, code: err.code ?? 'download_save_failed', detail: { source_exists: existsSync(source), artifact_id: item.guid },
+          // A FIXED code, with the errno kept as evidence. `err.code` here is
+          // libuv's - EACCES, ENOSPC - and putting it in `code` leaks it into
+          // the OpenAI-shaped `error.type`, which callers branch on and which
+          // is meant to be the closed set documented in README.
+          status: 502, code: 'download_save_failed',
+          detail: { source_exists: existsSync(source), artifact_id: item.guid, errno: err.code ?? null },
         })
       }
       // The staged copy is disposable once `path` holds the bytes, so a

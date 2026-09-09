@@ -163,7 +163,16 @@ function merge(base, over) {
 
 /** Load config.json if present, merged over defaults. */
 export function loadConfig(path = resolve(HOME, 'config.json')) {
-  const file = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {}
+  // A hand-edited config with a trailing comma threw a bare SyntaxError
+  // from deep inside startup, naming neither the file nor the fix.
+  let file = {}
+  if (existsSync(path)) {
+    try {
+      file = JSON.parse(readFileSync(path, 'utf8'))
+    } catch (e) {
+      throw new RequestError(`${path} is not valid JSON: ${e.message}`)
+    }
+  }
   validateConfig(file, path)
   const cfg = merge(DEFAULTS, file)
   cfg.providers = cfg.providers ?? {}

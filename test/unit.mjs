@@ -1,6 +1,10 @@
-// Unit tests: the pure layer, no browser, no network. Runs in milliseconds.
+// Unit tests: the pure layer, no browser, no network.
 //
-//   node --test test/
+//   npm test
+//
+// NOT `node --test test/` - that would sweep in the LIVE suites, which
+// drive real sites and spend the subscription. `npm test` names the
+// offline files explicitly, which is why it is the documented command.
 //
 // These cover the parts that used to be untestable because they were welded
 // into the driver. Every case below is a bug that actually happened or a
@@ -21,7 +25,7 @@ import { WireTap } from '../src/transports/wire.mjs'
 import { Pacer } from '../src/core/async.mjs'
 import { mergeReading, orderedMessages, contentKey, stitchRun, readingAgrees, sweepThread } from '../src/transports/thread-dom.mjs'
 import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createApp } from '../src/api/server.mjs'
@@ -29,6 +33,36 @@ import { listThreads, readThreadEvents, recordThreadEvent } from '../src/core/le
 
 const NL = String.fromCharCode(10)
 const lines = (...l) => l.join(NL)
+
+test('a damaged ledger line does not hide every other thread', async () => {
+  // The ledger is append-only, so the realistic damage is a truncated last
+  // line from a process that died mid-write. A single JSON.parse over the
+  // whole file turned that into a throw for `threads`, `thread` and every
+  // listing - one corrupt byte and the entire history looked gone.
+  const dir = mkdtempSync(join(tmpdir(), 'uibridge-ledger-bad-'))
+  try {
+    const root = join(dir, 'ledger')
+    const turn = (thread_id) => ({
+      at: '2026-09-09T00:00:00.000Z', request_id: 'r', provider: 'gemini', thread_id,
+      inputs: [], outputs: [],
+    })
+    await recordThreadEvent(root, turn('good_one'))
+    await recordThreadEvent(root, turn('damaged'))
+    // Append a half-written line, exactly as an interrupted write would leave it.
+    appendFileSync(join(root, 'gemini', 'damaged.jsonl'), '{"kind":"turn","at":"2026-09-0')
+
+    const record = readThreadEvents(root, 'gemini', 'damaged')
+    assert.equal(record.events.length, 1, 'the intact events are still returned')
+    assert.equal(record.skipped, 1, 'and the damaged one is COUNTED, not silently dropped')
+
+    const listed = await listThreads(root, 'gemini')
+    assert.equal(listed.length, 2, 'the healthy thread is still listed')
+    assert.equal(listed.find((t) => t.thread_id === 'damaged').skipped, 1, 'the damage is visible on the row')
+    assert.ok(!('skipped' in listed.find((t) => t.thread_id === 'good_one')), 'an undamaged thread says nothing')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('thread ledger records file identities without prompt or answer content', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'uibridge-ledger-'))

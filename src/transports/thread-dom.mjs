@@ -229,16 +229,6 @@ export function rowKey(row, contract) {
 }
 
 /**
- * Fold a page reading into the store, and extend the running order.
- *
- * Pure, so ordering and de-duplication can be tested without a browser -
- * they are the parts that decide whether an export is trustworthy.
- *
- * A row seen again REPLACES the stored copy only when it carries more text:
- * a message can be mounted while still rendering, and the fuller reading is
- * the true one. Its position never moves.
- */
-/**
  * Splice one reading's DOM order into the running order.
  *
  * WHY STITCHING RATHER THAN "FIRST SIGHT WINS": what a reading gives is a
@@ -277,6 +267,20 @@ export function readingKeys(rows, contract) {
   return rows.filter((r) => r.role || r.text).map((r) => rowKey(r, contract).key)
 }
 
+/**
+ * Fold a page reading into the store, and extend the running order.
+ *
+ * Pure, so ordering and de-duplication can be tested without a browser -
+ * they are the parts that decide whether an export is trustworthy.
+ *
+ * A row seen again is merged PER AXIS: the longer text wins, and so does the
+ * fuller list of attachments, file controls, media and links, each decided
+ * independently. It used to replace the stored copy only when the new row
+ * had more TEXT, which threw away everything else on it - and since the
+ * upward hydration pass merges unsettled readings, the thinnest version of a
+ * row routinely arrives first. That is how a message's annex went missing
+ * from its own export. Position never moves.
+ */
 export function mergeReading(store, order, rows, contract) {
   let added = 0
   for (const row of rows) {

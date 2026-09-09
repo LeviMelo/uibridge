@@ -32,6 +32,7 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { Mutex, waitFor } from '../core/async.mjs'
 import { normalizeNewlines } from '../core/markdown.mjs'
 import { captureDownload } from './download.mjs'
+import { BridgeError } from '../core/errors.mjs'
 
 // Process-wide: the clipboard is a machine resource, not a per-tab one.
 const clipboard = new Mutex()
@@ -232,7 +233,10 @@ export async function downloadGeneratedFiles(page, spec, { dir = 'downloads', wa
     } catch (e) {
       log?.warn(`generated file ${declared ?? i} not retrievable: ${e.message.split('\n')[0]}`)
       out.push({ name: declared, path: null, bytes: null, type: kind, error: 'retrieval failed',
-        failure: { code: e.code ?? 'download_failed', request_id: requestId ?? null, ...(e.detail ?? {}) } })
+        // Keep a code from OUR taxonomy when the failure carries one, but
+        // never let a foreign errno through as if it were one of ours.
+        failure: { code: e instanceof BridgeError ? e.code : 'download_failed',
+          request_id: requestId ?? null, ...(e.detail ?? {}) } })
     }
     // Dismiss the overlay, or it hides the composer for the NEXT request -
     // which surfaces as a composer that exists but never becomes visible.

@@ -54,8 +54,24 @@ export async function recordThreadEvent(root, event) {
 export function readThreadEvents(root, provider, threadId) {
   const path = ledgerPath(root, provider, threadId)
   if (!existsSync(path)) return { path, events: [] }
-  const events = readFileSync(path, 'utf8').split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line))
-  return { path, events }
+  // ONE BAD LINE MUST NOT COST THE WHOLE LEDGER.
+  // This is an append-only audit trail, so the realistic damage is a
+  // truncated final line from a process that died mid-write - and a single
+  // JSON.parse over the whole file turned that into a thrown error for
+  // `threads`, `thread` and every listing, hiding every OTHER thread with it.
+  // Bad lines are COUNTED rather than swallowed: quietly returning fewer
+  // events than the file holds would be its own kind of lie.
+  const events = []
+  let skipped = 0
+  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    if (!line) continue
+    try {
+      events.push(JSON.parse(line))
+    } catch {
+      skipped++
+    }
+  }
+  return { path, events, ...(skipped ? { skipped } : {}) }
 }
 
 export async function listThreads(root, provider = null) {
@@ -69,9 +85,10 @@ export async function listThreads(root, provider = null) {
     for (const file of await readdir(dir, { withFileTypes: true })) {
       if (!file.isFile() || !file.name.endsWith('.jsonl')) continue
       const thread_id = file.name.slice(0, -6)
-      const { events } = readThreadEvents(base, id, thread_id)
+      const { events, skipped } = readThreadEvents(base, id, thread_id)
       const last = events.at(-1)
-      out.push({ provider: id, thread_id, turns: events.length, updated_at: last?.at ?? null, path: join(dir, file.name) })
+      out.push({ provider: id, thread_id, turns: events.length, updated_at: last?.at ?? null,
+        path: join(dir, file.name), ...(skipped ? { skipped } : {}) })
     }
   }
   return out.sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))

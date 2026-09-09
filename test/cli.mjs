@@ -359,6 +359,26 @@ test('the daemon is reused, and stop actually stops it', async () => {
   assert.equal(gone, false, 'the port is free again')
 })
 
+test('--local answers without a daemon, and refuses what needs one', async () => {
+  // --local is the one path that bypasses the daemon and drives the provider
+  // in the CLI process itself. It had no test at all, so nothing caught a
+  // change that made it start a daemon anyway - which is the whole point of
+  // the flag, and also the one-process-per-profile rule.
+  await cli(['stop'])
+  const r = await cli(['ask', 'echo', 'local please', '--local', '--json'])
+  assert.equal(r.code, 0)
+  const doc = json(r.stdout)
+  assert.equal(typeof doc.thread_id, 'string', 'it still records a native thread id')
+  const started = await fetch(`http://127.0.0.1:${PORT}/health`).then(() => true).catch(() => false)
+  assert.equal(started, false, 'and no daemon was started behind our back')
+
+  // A durable key needs the daemon that owns the record, so asking for both
+  // is a contradiction and must be refused rather than silently downgraded.
+  const both = await cli(['ask', 'echo', 'x', '--local', '--key=k1'])
+  assert.equal(both.code, 1)
+  assert.match(both.out, /--key requires the daemon/)
+})
+
 test('a daemon serving a different state directory is refused, not used', async () => {
   // Otherwise a command run with a test configuration is silently answered by
   // yesterday's daemon, with yesterday's config, logins and ledger.
