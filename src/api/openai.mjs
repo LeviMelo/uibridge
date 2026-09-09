@@ -20,6 +20,15 @@ export function flattenMessages(messages) {
   }
   const parts = []
   for (const m of messages) {
+    if (!m || typeof m !== 'object' || Array.isArray(m)) {
+      throw new RequestError('each message must be an object')
+    }
+    if (!['system', 'developer', 'user', 'assistant'].includes(m.role)) throw new RequestError('Unsupported message role')
+    if (typeof m.content !== 'string' && !Array.isArray(m.content)) throw new RequestError('message content must be text or text parts')
+    if (m.tool_calls || m.function_call || m.name || m.refusal || m.audio) throw new RequestError('Only unnamed text messages are supported')
+    if (Array.isArray(m.content) && m.content.some((c) =>
+      !c || typeof c !== 'object' || c.type !== 'text' || typeof c.text !== 'string'
+    )) throw new RequestError('message content parts must be objects with string text')
     const content =
       typeof m.content === 'string'
         ? m.content
@@ -27,7 +36,7 @@ export function flattenMessages(messages) {
           ? m.content.map((c) => c.text ?? '').filter(Boolean).join('\n')
           : ''
     if (!content.trim()) continue
-    if (m.role === 'user' || messages.length === 1) parts.push(content)
+    if (m.role === 'user' && messages.length === 1) parts.push(content)
     else if (m.role === 'system') parts.push(`[system]\n${content}`)
     else parts.push(`[${m.role}]\n${content}`)
   }
@@ -47,12 +56,14 @@ export function readAttachments(body) {
 export function readModes(body) {
   const modes = body.modes ?? {}
   if (typeof modes !== 'object' || Array.isArray(modes)) throw new RequestError('modes must be an object')
-  return Object.fromEntries(Object.entries(modes).map(([k, v]) => [k, !!v]))
+  if (Object.values(modes).some((v) => typeof v !== 'boolean')) throw new RequestError('mode values must be booleans')
+  return { ...modes }
 }
 
 export function readThreadId(body) {
   const value = body.thread_id ?? body._uibridge?.thread_id ?? null
   if (value !== null && typeof value !== 'string') throw new RequestError('thread_id must be a string')
+  if (value !== null && !/^[A-Za-z0-9_-]+$/.test(value)) throw new RequestError('thread_id must be a non-empty native identifier')
   return value
 }
 
@@ -83,6 +94,7 @@ export function completionResponse({ modelId, result, provider }) {
     _uibridge: {
       provider,
       request_id: result.request_id,
+      input: result.input ?? null,
       thread_id: result.thread_id,
       ledger: result.ledger ?? null,
       elapsed_ms: result.elapsed_ms,
@@ -97,16 +109,13 @@ export function completionResponse({ modelId, result, provider }) {
       //                used when the system clipboard is unavailable
       //   rendered     innerText, structure lost (last resort)
       extraction: result.extraction ?? 'copy',
+      extraction_warning: result.extraction_warning ?? null,
       markdown: result.markdown,
       // True when maths was rendered but its source is not in the DOM, so the
       // formula is glyphs rather than LaTeX. Never silently pretended.
       lossy_math: result.lossy_math ?? false,
-      // TRUE when the delivered text is the provider's own error notice
-      // ("Sorry, something went wrong...") rather than an answer. It is
-      // still returned as content and still a 200: the UI produced a message
-      // and the bridge retrieved it, which is all this layer promises. What
-      // to do about it - retry, skip the row, log it - is the caller's
-      // policy, and this flag is so that policy needn't match on prose.
+      // Session/CLI results retain this flag. The HTTP boundary rejects
+      // recognised provider error notices with 502 instead of success.
       provider_error: result.provider_error ?? false,
       tables: result.tables,
       code_blocks: result.code_blocks,

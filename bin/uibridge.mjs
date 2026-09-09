@@ -16,7 +16,8 @@
 
 import { loadConfig, providerSettings, portFor, ROOT, HOME } from '../src/core/config.mjs'
 import { resolve } from 'node:path'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { createInterface } from 'node:readline/promises'
 import { setLevel, logger } from '../src/core/log.mjs'
 import { BridgeError } from '../src/core/errors.mjs'
@@ -56,9 +57,11 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
   uibridge thread <provider> <id>      show a thread's local file/turn ledger
   uibridge doctor [provider]          verify Chrome, session and UI contracts
   uibridge doctor <provider> --anon   prove signed-OUT is detected (throwaway profile)
-  uibridge ask <provider> "prompt"    single prompt, no server
+  uibridge ask <provider> "prompt" [--key=ID]  durable prompt via daemon
                                       [--file=path ...] [--model=id] [--thinking=on|off]
                                       [--thread=id] [--json]
+  uibridge request status|recover|cancel <key> [--json]
+  uibridge profiles [--json]         saved locations and last successful use
   uibridge chat <provider>             persistent same-tab conversation
                                       [--thread=id] [--model=id] [--jsonl]
   uibridge stop                       stop the background uibridge (restart after code changes)
@@ -307,16 +310,23 @@ async function ask(id, args) {
   const words = []
   let json = false
   let threadId = null
+  let key = null
   for (const a of args) {
     if (a.startsWith('--file=')) files.push(a.slice(7))
     else if (a.startsWith('--model=')) model = a.slice(8)
-    else if (a.startsWith('--thinking=')) modes.thinking = a.slice(11) !== 'off'
+    else if (a.startsWith('--thinking=')) {
+      if (!['on', 'off'].includes(a.slice(11))) throw new BridgeError('--thinking must be on or off', { code: 'invalid_request', status: 400 })
+      modes.thinking = a.slice(11) === 'on'
+    }
     else if (a === '--json') json = true
     else if (a.startsWith('--thread=')) threadId = a.slice(9)
+    else if (a.startsWith('--key=')) key = a.slice(6)
+    else if (a === '--local') continue
     else words.push(a)
   }
   const prompt = words.join(' ')
   if (!prompt) usage(1)
+  if (args.includes('--local') && key) throw new BridgeError('--key requires the daemon; remove --local', { code: 'invalid_request', status: 400 })
   // JSON mode is a real machine interface: informational logs belong
   // nowhere in stdout or they corrupt the document. Warnings/errors already
   // use stderr, so retain those.
@@ -326,6 +336,10 @@ async function ask(id, args) {
   // only process that may drive that Chrome profile. Starting a cold one
   // per turn was costing ~40s and colliding with `serve`.
   const daemon = args.includes('--local') ? null : await ensureDaemon(cfg, { log: logger('cli') })
+  if (daemon) {
+    key ??= `cli-${randomUUID()}`
+    console.error(`Request key: ${key}\nRecover: uibridge request recover ${key} --json`)
+  }
   const r = daemon
     ? flatten(
         await daemonPost(`${daemon.base}/v1/chat/completions`, {
@@ -334,7 +348,7 @@ async function ask(id, args) {
           files,
           modes,
           thread_id: threadId,
-        })
+        }, { headers: { 'Idempotency-Key': key } })
       )
     : null
   const session = daemon ? null : await Session.open(id, { cfg })
@@ -400,6 +414,8 @@ async function chat(id, args) {
   const run = async (prompt) => {
     if (!prompt.trim()) return
     const files = first ? options.files : []
+    const key = `cli-${randomUUID()}`
+    if (daemon) console.error(`Request key: ${key}\nRecover: uibridge request recover ${key} --json`)
     const result = daemon
       ? flatten(
           await daemonPost(`${daemon.base}/v1/chat/completions`, {
@@ -408,15 +424,14 @@ async function chat(id, args) {
             files,
             modes: options.modes,
             thread_id: threadId,
-          })
+          }, { headers: { 'Idempotency-Key': key } })
         )
       : await session.ask({ prompt, threadId, model: options.model, modes: options.modes, files })
     first = false
     threadId = result.thread_id
     if (options.jsonl) console.log(JSON.stringify(result))
     else {
-      console.log(`\n${result.text}\n`)
-      console.log(`--- thread:${threadId} | ${result.elapsed_ms}ms | files:${result.files.length}${result.truncated ? ' | TRUNCATED' : ''}\n`)
+      await printAsk(result, false)
     }
   }
   try {
@@ -634,13 +649,39 @@ async function status(only, json = false) {
   if (Object.values(out).some((v) => !v.authenticated)) process.exitCode = 1
 }
 
+async function profiles(args) {
+  const history = await listThreads(resolve(HOME, cfg.ledgerDir))
+  const result = providerIds.map((provider) => {
+    const path = providerSettings(cfg, provider, providerClass(provider).defaults).profileDir
+    return { provider, path, exists: existsSync(path),
+      last_successful_authenticated_use: history.find((r) => r.provider === provider)?.updated_at ?? null,
+      evidence: 'successful_thread_ledger; not a current login check' }
+  })
+  if (args.includes('--json')) console.log(JSON.stringify(result, null, 2))
+  else for (const entry of result) console.log(`${entry.provider}: ${entry.path}\n  profile ${entry.exists ? 'present' : 'absent'}; last recorded use: ${entry.last_successful_authenticated_use ?? 'unknown'}`)
+}
+
+async function requestCommand(args) {
+  const [action, key] = args
+  if (!['status', 'recover', 'cancel'].includes(action) || !key || !/^[\x21-\x7e]{1,200}$/.test(key)) {
+    throw new BridgeError('Usage: uibridge request status|recover|cancel <key> [--json]', { code: 'invalid_request', status: 400 })
+  }
+  setLevel('warn')
+  const daemon = await ensureDaemon(cfg)
+  const result = await daemonPost(`${daemon.base}/v1/requests/${action === 'recover' ? 'result' : action}`, {}, {
+    method: action === 'cancel' ? 'POST' : 'GET', headers: { 'Idempotency-Key': key },
+  })
+  if (action === 'recover') await printAsk(flatten(result), args.includes('--json'))
+  else console.log(JSON.stringify(result, null, 2))
+}
+
 try {
   if (cmd === 'serve' || cmd === undefined) {
     // Headless is the default because this is a background service. --headed
     // is for watching it work, which is the only way some UI bugs are ever
     // found.
     const headed = rest.includes('--headed') || rest.includes('--no-headless')
-    await serve({ ...cfg, headless: headed ? false : rest.includes('--headless') ? true : cfg.headless })
+    await serve({ ...cfg, windowModeOverride: headed ? false : rest.includes('--headless') ? true : undefined })
   }
   else if (cmd === 'login') await login(requireProviderArg(rest[0]))
   else if (cmd === 'logout') await logout(requireProviderArg(rest[0]))
@@ -667,6 +708,8 @@ try {
   else if (cmd === 'chat') await chat(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'stop') await stopDaemon()
   else if (cmd === 'paths') paths(rest)
+  else if (cmd === 'profiles') await profiles(rest)
+  else if (cmd === 'request') await requestCommand(rest)
   else if (cmd === 'autostart') await autostart(rest)
   else if (cmd === 'export') await exportThread(requireProviderArg(rest[0]), rest.slice(1))
   else if (cmd === 'capture') {

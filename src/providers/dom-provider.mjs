@@ -30,6 +30,7 @@ import {
 import { reconstructMarkdown } from '../transports/markdown-dom.mjs'
 import { sweepThread, mountMessage } from '../transports/thread-dom.mjs'
 import { WireTap } from '../transports/wire.mjs'
+import { fillComposer, normalizeComposerText, readComposer } from '../core/composer.mjs'
 import { captureDownload } from '../transports/files-wire.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
@@ -263,12 +264,17 @@ export class DomProvider extends Provider {
 
   async newConversation(page) {
     const s = this.sel
+    const fresh = async () => !(await this.currentThread(page)) && (await this.turnCount(page)) === 0
     if (s.newChatButton && (await count(page, s.newChatButton))) {
       await page.locator(s.newChatButton).first().click({ timeout: 10000 }).catch(() => {})
-    } else {
+    }
+    try {
+      await waitFor(fresh, { timeout: 3000, poll: this.settings.pollMs, what: 'a fresh conversation' })
+    } catch {
       await page.goto(this.settings.url, { waitUntil: 'domcontentloaded' })
     }
     await page.locator(s.composer).first().waitFor({ state: 'visible', timeout: 30000 })
+    await waitFor(fresh, { timeout: 10000, poll: this.settings.pollMs, what: 'a verified empty conversation' })
   }
 
   async resumeThread(page, threadId) {
@@ -311,12 +317,15 @@ export class DomProvider extends Provider {
   }
 
   async currentThread(page, ctx = {}) {
+    // The answer stream carries the authoritative conversation identity.
+    if (ctx.wireResult?.decoded?.conversationId) return ctx.wireResult.decoded.conversationId
     const current = new URL(page.url())
     if (current.origin !== this.origin || !this.sel.thread?.urlPattern) return null
     const fromUrl = current.pathname.match(new RegExp(this.sel.thread.urlPattern))?.[1] ?? null
     if (fromUrl) return fromUrl
-    const before = new Set(ctx.threadIdsBefore ?? [])
-    return (await this.threadIds(page)).find((id) => !before.has(id)) ?? null
+    // A sidebar lists unrelated history. The first link is never evidence
+    // that this page belongs to that thread, even while the URL is updating.
+    return null
   }
 
   async turnCount(page) {
@@ -751,16 +760,6 @@ export class DomProvider extends Provider {
     // submission than an emptied composer: the request actually went out.
     if (this.wired) ctx.wire = (await WireTap.attach(page)).expect(s.wire.answer)
 
-    const type = async () => {
-      await composer.click()
-      await page.keyboard.insertText(prompt)
-      const typed = ((await composer.innerText().catch(() => '')) ?? '').trim()
-      if (!typed) throw new BridgeError('the prompt did not reach the composer', {
-        status: 502,
-        code: 'compose_failed',
-        retryable: true,
-      })
-    }
     const fire = async () => {
       if (s.submitKey) return composer.press(s.submitKey)
       await this.requireContract(page, 'sendButton', s.sendButton)
@@ -769,8 +768,8 @@ export class DomProvider extends Provider {
       await this.clickThrough(page.locator(s.sendButton).first(), { timeout: 15000, what: 'the send button' })
     }
 
+    await fillComposer(composer, prompt)
     for (let attempt = 1; attempt <= 2; attempt++) {
-      await type()
       await fire()
       try {
         if (ctx.wire) {
@@ -781,13 +780,19 @@ export class DomProvider extends Provider {
         // not happened by now it is not going to.
         await waitFor(
           async () => {
-            const left = ((await composer.innerText().catch(() => '')) ?? '').trim()
+            const left = ((await readComposer(composer).catch(() => '')) ?? '').trim()
             return left ? null : true
           },
           { timeout: 8000, poll: this.settings.pollMs, what: 'the composer to clear after sending' }
         )
         return
       } catch {
+        const remaining = await readComposer(composer).catch(() => null)
+        if (remaining === null || normalizeComposerText(remaining) !== normalizeComposerText(prompt)) {
+          throw new BridgeError('Submission could not be confirmed; refusing to resend a possibly accepted prompt', {
+            status: 502, code: 'submit_uncertain', retryable: false,
+          })
+        }
         if (attempt === 2) {
           throw new BridgeError(
             `${this.id}: the prompt was typed but never submitted - the composer still holds it`,
@@ -971,7 +976,10 @@ export class DomProvider extends Provider {
     //   dom-markdown rebuilt from the elements: tables, fences, lists survive
     //   rendered     innerText, structure lost - last resort
     const rendered = await readRenderedText(page, { blocks: s.responseBlocks, text: s.responseText }, ctx.index)
+    const copyDiagnostics = {}
     const copied = await copyMarkdown(page, s, {
+      diagnostics: copyDiagnostics,
+      scope: page.locator(s.responseBlocks).nth(ctx.index),
       expectLen: rendered.length,
       rendered,
       pollMs: cfg.pollMs,
@@ -1026,6 +1034,7 @@ export class DomProvider extends Provider {
       extraction,
       markdown: extraction !== 'rendered',
       lossy_math: lossyMath,
+      extraction_warning: copied ? null : copyDiagnostics,
       // The text is the provider's own error notice rather than an answer.
       // Delivered anyway; the caller decides what that means.
       provider_error: providerError,
@@ -1052,6 +1061,8 @@ export class DomProvider extends Provider {
     const cfg = this.settings
     if (!s.generatedFile?.chip) return []
     return downloadGeneratedFiles(page, s.generatedFile, {
+      scope: page.locator(s.responseBlocks).nth(ctx.index),
+      requestId: ctx.requestId,
       dir: cfg.downloadDir,
       waitMs: cfg.fileWaitMs,
       pollMs: cfg.pollMs,

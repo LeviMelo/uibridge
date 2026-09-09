@@ -20,6 +20,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { BridgeError } from './errors.mjs'
 import { sleep, waitFor } from './async.mjs'
 import { logger } from './log.mjs'
+import { manageWindows } from './window.mjs'
 
 const log = logger('chrome')
 const spawned = new Map() // port -> child
@@ -104,17 +105,37 @@ async function launch(port, userDataDir, headless) {
  * the message "Copy" button is the only route to the original markdown - see
  * transports/dom.mjs for why that matters.
  */
+export async function connectBrowser(port, { connect = (url, options) => chromium.connectOverCDP(url, options), timeout = 8000 } = {}) {
+  // Retrying attachment is safe: no provider request has been submitted yet.
+  // Never restart Chrome automatically: another client may own an active tab.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      return await connect(`http://127.0.0.1:${port}`, { timeout })
+    } catch (error) {
+      if (attempt < 2) continue
+      throw new BridgeError(
+        `Cannot attach to Chrome on port ${port} after two attempts. Chrome may have unresponsive tabs even when its debugging endpoint responds. No prompt was submitted by this request. Close and reopen the dedicated provider browser when idle, then submit with a new request key; recover only retrieves the saved outcome.`,
+        { status: 503, code: 'browser_unavailable', detail: {
+          stage: 'browser_attach', submission_started: false, attempts: attempt,
+          port, cause: String(error.message ?? error).split('\n')[0].slice(0, 300),
+        } }
+      )
+    }
+  }
+}
+
 export async function attachBrowser({ port, userDataDir, headless = false, clipboardOrigins = [] }) {
   const fresh = !(await debuggerUp(port))
   if (fresh) await launch(port, userDataDir, headless)
 
-  const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+  const browser = await connectBrowser(port)
   const ctx = browser.contexts()[0] ?? (await browser.newContext())
+  const preparePage = await manageWindows(ctx, headless, log)
   for (const origin of clipboardOrigins) {
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin }).catch(() => {})
   }
   log.debug(`${fresh ? 'launched' : 'reattached'} on ${port}`)
-  return { browser, ctx, launched: fresh }
+  return { browser, ctx, launched: fresh, preparePage }
 }
 
 /** Kill only Chrome instances we started. The user's own browser is theirs. */

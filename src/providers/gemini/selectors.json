@@ -212,7 +212,7 @@
   "_attachStrategy": "Synthetic DragEvents are ignored and there is no input[type=file]; CDP dispatches a trusted drag that takes file paths.",
   "pickerStrategy": "combined",
   "_pickerStrategy": "One control carries model AND extended thinking; its aria-label is the only readable state for either.",
-  "errorText": "Sorry, something went wrong|Something went wrong|Algo deu errado|Ocorreu um erro|try your request again",
+  "errorText": "Sorry, something went wrong|Something went wrong|Algo deu errado|Ocorreu um erro|try your request again|^I'm having a hard time fulfilling your request\\.",
   "_errorText": [
     "Gemini renders its OWN failures as an ordinary assistant message, e.g.",
     "'Sorry, something went wrong. Please try your request again.' Extraction",

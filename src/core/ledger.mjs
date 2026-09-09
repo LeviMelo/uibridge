@@ -10,6 +10,15 @@ import { dirname, join, resolve } from 'node:path'
 const queues = new Map()
 const safe = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '_')
 
+export function auditProvenance(provenance) {
+  if (!provenance) return null
+  const setting = (value) => value && Object.fromEntries(['requested', 'applied', 'verified', 'note', 'expected_slug', 'expected_effort']
+    .filter((key) => value[key] !== undefined).map((key) => [key, value[key]]))
+  return { model: setting(provenance.model), modes: Object.fromEntries(Object.entries(provenance.modes ?? {}).map(([key, value]) => [key, setting(value)])),
+    ...Object.fromEntries(['final_state', 'answered_by', 'sent_as', 'sent_effort', 'history']
+      .filter((key) => provenance[key] !== undefined).map((key) => [key, provenance[key]])) }
+}
+
 export async function fileIdentity(path) {
   const info = await stat(path)
   const hash = createHash('sha256')
@@ -26,13 +35,18 @@ export async function recordThreadEvent(root, event) {
   mkdirSync(dirname(path), { recursive: true })
   const inputs = await Promise.all(event.inputs.map(fileIdentity))
   const outputs = await Promise.all(event.outputs.map(async (f) => {
-    if (f.error || !f.path || !existsSync(f.path)) return { ...f }
-    return { ...f, ...(await fileIdentity(f.path)) }
+    const metadata = Object.fromEntries(['name', 'path', 'bytes', 'mime', 'type', 'source', 'error', 'failure']
+      .filter((key) => f[key] !== undefined).map((key) => [key, f[key]]))
+    if (f.error || !f.path || !existsSync(f.path)) return metadata
+    return { ...metadata, ...(await fileIdentity(f.path)) }
   }))
-  const row = { ...event, inputs, outputs }
+  const row = { ...event, provenance: auditProvenance(event.provenance), inputs, outputs }
   const previous = queues.get(path) ?? Promise.resolve()
   const pending = previous.then(() => appendFile(path, `${JSON.stringify(row)}\n`, 'utf8'))
-  queues.set(path, pending.catch(() => {}))
+  const tail = pending.catch(() => {}).finally(() => {
+    if (queues.get(path) === tail) queues.delete(path)
+  })
+  queues.set(path, tail)
   await pending
   return { path, event: row }
 }

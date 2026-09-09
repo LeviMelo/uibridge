@@ -1,5 +1,7 @@
 # uibridge
 
+Current engineering handoff and measured limitations: [HANDOFF.md](HANDOFF.md).
+
 A local, OpenAI-compatible HTTP API backed by chat UIs you already pay for.
 
 It replaces moving files in and out of a chat window by hand. Your
@@ -89,13 +91,13 @@ supervisor.
 
 ### Calling it
 
-It speaks the OpenAI API on `http://127.0.0.1:8477/v1`, so anything that
-takes a base URL works unchanged. No key is needed; clients that insist on
-one accept any string:
+It implements the text Chat Completions subset on `http://127.0.0.1:8477/v1`.
+Standard OpenAI clients work with the supported options below. No key is
+needed; clients that insist on one accept any string:
 
 ```python
 from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:8477/v1", api_key="local")
+client = OpenAI(base_url="http://127.0.0.1:8477/v1", api_key="local", max_retries=0, timeout=900)
 r = client.chat.completions.create(
     model="chatgpt-5.6-medium",
     messages=[{"role": "user", "content": "Extract the sample size from this abstract: ..."}],
@@ -111,7 +113,148 @@ curl http://127.0.0.1:8477/v1/chat/completions -H 'content-type: application/jso
 specifics - which model actually answered, citations, generated files, the
 thread id to continue - come back under `_uibridge`, described below.
 
-### Nothing pops up
+### Compatibility and scientific workloads
+
+Supported: `/v1/models`, `/v1/chat/completions`, text messages, streaming,
+`stream_options.include_usage`, and `response_format` with `text`, `json_object`
+or `json_schema`. Local attachments, modes, native-thread continuation and
+thread export are extensions. `/v1/capabilities` describes these limits.
+
+JSON/schema output is prompted and then validated with Ajv. The provider does
+not perform constrained decoding. Malformed or nonconforming output returns
+502 `invalid_response_format`; structured streams wait for validation before
+emitting content. Draft-07 schemas and explicitly declared draft-2020-12 schemas
+are supported; unsupported schema features fail before inference. Validation
+does not coerce types, remove fields, or repair model output.
+
+Controls the UI cannot honour (including temperature, token caps, tools and
+multiple choices) return 400 instead of being silently ignored. Images/audio
+inside OpenAI message content are unsupported; use local file attachments.
+There is no Responses, embeddings or Batch API. Roles are labels in a single
+UI prompt, not native system/developer instruction channels. Token usage is
+unobservable and returned as zero placeholders.
+
+Use a specific model ID for experiments. `strictModel` defaults to true;
+unverified selection fails rather than quietly using another model. Gemini
+verification is based on the UI picker; ChatGPT additionally checks the
+server's model slug and sent effort. Provider aliases such as `gemini` mean
+whatever model is currently selected, so they provide no model guarantee.
+
+Requests above `provider.maxComposerChars` (32,000 by default) are carried in
+a temporary UTF-8 attachment because rich-text editors can truncate or stall
+on large pastes. The local temporary file is deleted after completion/failure;
+the provider's uploaded copy remains in that conversation. `_uibridge.input`
+reports the original character count, SHA-256 and `composer`/`attachment`
+transport. Both providers passed retrieval of beginning/middle/end identifiers
+from about 196,000 characters; this does not establish their maximum context
+window or exhaustive reading of every uploaded document.
+
+Treat results as candidates for validation. Check finish reason, model
+provenance, missing/error files and extraction quality. Recognised provider
+error notices and empty answers return 502. Partial ordinary text has
+`finish_reason: "length"`; errors after streaming begins arrive as an SSE
+error event without a successful finish. Consume the stream to completion.
+Without an idempotency key, keep SDK retries disabled: a timeout does not prove
+a prompt was never sent. Disconnecting cancels local unkeyed work, removes
+queued waits and closes its active tab. The provider may continue generation
+on its servers after the tab closes; the bridge cannot guarantee cancellation
+of provider-side compute.
+
+### Durable requests and cancellation
+
+CLI `ask` and `chat` use durable keys by default with the daemon. Each turn
+prints its key and recovery command to stderr before waiting, so JSON stdout
+stays parseable. Use `ask --key=study-42-v1` to supply your own stable key.
+Direct `--local` debugging does not provide durable storage.
+
+```powershell
+uibridge ask gemini --model=gemini-pro --thinking=off --key=study-42-v1 "Read this evidence..."
+uibridge request status study-42-v1 --json
+uibridge request recover study-42-v1 --json
+uibridge request cancel study-42-v1 --json
+```
+
+Recovery waits for active work or reads its saved response without sending
+another prompt or requiring the original files. Its HTTP equivalent is
+`GET /v1/requests/result` with the `Idempotency-Key` header. A printed key can
+still report 404 if the server had not accepted the request; retry the original
+request with that key. Uncertain crash outcomes remain explicit errors.
+
+Send a stable `Idempotency-Key` header for each logical inference. Concurrent
+duplicates share one execution; later retries replay the same response ID and
+content, including across daemon restarts. A changed request or attachment
+under the same key returns 409 `idempotency_conflict`. Attachment bytes are
+snapshotted before queuing so later source-file edits cannot change that turn.
+Keep source attachments available for retry identity checks.
+
+```python
+r = client.chat.completions.create(
+    model="chatgpt-5.6-medium",
+    messages=[{"role": "user", "content": "Classify this evidence: ..."}],
+    extra_headers={"Idempotency-Key": "study-42-classification-v1"},
+)
+```
+
+Keyed work survives HTTP disconnection. Cancel it explicitly with
+`POST /v1/requests/cancel`, supplying the same `Idempotency-Key` header; inspect
+it with `GET /v1/requests/status`. Cancelled work returns 499
+`request_cancelled`. Failures and cancellations are terminal for that key.
+To deliberately start another inference, use a new key. With keyed streaming,
+content is buffered until the final result is validated and saved; the stream
+then contains that persisted result. `stream` and `stream_options` do not
+change request identity, so a saved result can be replayed in either form.
+
+Records are stored in `requestDir` (default `.uibridge/requests`), with hashed
+key filenames and the complete response, but without the original prompt.
+They can contain sensitive generated content. Records have no automatic
+expiry: deleting one also deletes its duplicate protection. A crash during
+inference leaves `outcome_unknown` (409); inspect the native conversation
+before deliberately starting a new attempt. Unfinished work is never
+automatically resubmitted after a restart. This is durable result recovery,
+not an exactly-once guarantee from the chatbot provider or a Batch API.
+
+`maxPendingRequests` bounds admitted inference (64 by default), and
+`requestTimeoutMs` covers opening, pacing, queuing and inference (15 minutes).
+Queue overflow returns 503 `queue_full`. `/health` exposes active work and
+capacity. A keyed failure is saved too; inspect it before choosing a new key.
+
+`python examples/durable_batch.py requests.jsonl results.jsonl --run review-v1`
+provides a sequential, resumable batch client using Python's standard library.
+Each input row is `{"id":"study-42","body":{...Chat Completions request...}}`.
+It checkpoints full responses, reuses keys after transport failures, and stops
+on authentication, capacity/service errors, or unknown outcomes. Keep the run
+name stable to resume; use a new one for a deliberate new experiment. Completed
+and terminally failed rows are preserved. Edit neither the input nor attachments
+during a run. This client adds resumability without a provider Batch API.
+
+`npm run test:acceptance -- gemini-pro` (or `chatgpt-5.6-medium`) runs the live
+synthetic-evidence suite through the official JS SDK. It creates conversations
+and saves evidence under `.uibridge/acceptance/`. `npm test` runs offline/local
+HTTP regressions. Passing these tests is not a clinical or research benchmark.
+
+`node test/live-reliability.mjs MODEL` checks active cancellation followed by
+four paced inferences with concurrent duplicate requests and replay.
+`node test/scientific.mjs MODEL` downloads a pinned revision of the expert-labelled
+[PubMedQA dataset](https://github.com/pubmedqa/pubmedqa), selects four records
+per class deterministically, and compares short and long contexts with the
+reference conclusions/labels withheld. Scores include confusion matrices,
+macro-F1, exact evidence-quote matching and consistency across contexts.
+This public sample is not the official test split, may occur in model training,
+and is too small to estimate general scientific accuracy. An exact quote is
+not proof that it supports the conclusion. For your own adjudicated corpus,
+pass a JSONL path as the third argument; each row contains `id`, `question`,
+`contexts` (strings), and `label` (`yes`, `no`, `maybe`). Input manifests,
+hashes and results remain local under `.uibridge/scientific/`.
+
+### Browser visibility
+
+`uibridge profiles --json` lists persistent profile locations, directory
+existence, and last successful authenticated use recorded in the thread
+ledger. It reads no cookies and opens no browser. An absent timestamp means
+no recorded use, not signed out. `uibridge status` checks current authentication.
+Keep `UIBRIDGE_HOME` and `profileDir` stable to reuse saved logins; providers
+can still expire sessions. Profiles remain excluded from exports and packages.
+No automatic profile backups or credential copies are created.
 
 A chat window flashing open on every call is not something a caller asked
 for. There are three window modes, and each provider's default is MEASURED,
@@ -120,13 +263,46 @@ not assumed:
 | mode | what it is | who uses it |
 |---|---|---|
 | `true` | `--headless=new` | Gemini. Verified working with a signed-in profile. |
-| `"offscreen"` | a real, ordinary browser parked off the visible desktop | ChatGPT - measured 2026-09-06, it serves an ANONYMOUS session to true headless even with valid session cookies present and sent, so headless cannot be used there. Nothing appears on screen either way. |
+| `"offscreen"` | a real browser parked off the visible desktop | ChatGPT: the recorded true-headless test received an anonymous session. Offscreen mode keeps normal browser behaviour. Taskbar entries and brief popup flashes remain possible. |
 | `false` | a normal visible window | `uibridge login` always, and `uibridge serve --headed` when you want to watch it work. |
 
 Set `"headless"` globally or per provider in `config.json` (see
 `config.example.json`), or `UIBRIDGE_HEADED=1` for one run. Signing in always
 opens a real visible window: that is a human action, and this tool never
 sees or types your password.
+
+Offscreen mode also repositions existing windows when the service reconnects
+and positions newly opened tabs/windows. Login restores a previously parked
+window to the visible desktop. Window placement failures are logged as warnings.
+This is still ordinary Chrome: taskbar and Alt-Tab entries can remain, and a
+new popup may briefly appear before it is moved. Restart a running daemon
+after updating the code (`uibridge stop`; the next command starts it again).
+
+### Continuations, files and audit records
+
+Generated files are retrieved only from the current response. Earlier files
+remain available at their original local paths; prose continuations do not
+re-download historical controls. Gemini downloads use a bridge-owned staging
+directory and track viewer popups, avoiding short-lived Playwright artifact
+directories. Failures include `failure.code`, `failure.request_id`, and
+artifact existence/identity details when available in responses and ledgers.
+
+Canonical copying refreshes permission and emulates focus during the serialized
+copy operation. Fidelity remains visible as `extraction`, `lossy_math`, and
+`extraction_warning` (phase/reason on fallback). The ledger retains allowlisted
+model/mode verification and final picker state. Old entries cannot be
+retroactively verified.
+
+The bridge serializes its own requests to a native thread; it cannot lock that
+conversation against another browser or human. A second read-only view is
+tested, but simultaneous edits, model changes, branching or submissions from
+another client have no exclusivity guarantee. Avoid modifying the thread
+elsewhere while a bridge request runs. Use one driver per profile.
+
+`node test/live-continuations.mjs gemini-pro` exercises initial CSV generation,
+thinking off/on/off continuations, a second native view, and overlapping file
+generation on another thread. It tests transport and audit behavior, not
+scientific knowledge.
 
 ## Commands
 
@@ -149,7 +325,7 @@ node bin/uibridge.mjs ask chatgpt "..."     # one prompt, no server
 node bin/uibridge.mjs ask chatgpt --file=paper.pdf --model=chatgpt-5.6-high "..."
 node bin/uibridge.mjs doctor chatgpt --anon # prove signed-OUT is detected (throwaway profile)
 node bin/uibridge.mjs recon observe <url>   # map an unknown site: DOM vocabulary + network
-npm test                                    # 79 unit tests, no browser, ~2s
+npm test                                    # unit and local HTTP tests; no browser required
 python test/live.py                         # live UI-surface suite
 ```
 
@@ -176,13 +352,13 @@ after editing, or the next command reuses the old build. Its log is
 
 ## What comes back
 
-The OpenAI envelope is standard, so existing clients work unchanged.
+The response envelope follows Chat Completions for the supported subset.
 Everything provider-specific sits under `_uibridge`, and it is there to be
 honest about what happened rather than to look tidy:
 
 | field | why it exists |
 |---|---|
-| `provenance.model.applied` / `.verified` | Requested is not applied. Gemini genuinely drops model switches (its own bug), so the selection is retried and then read back from the UI. `verified: false` means the UI is on something else — `applied` names what. For a systematic review this is the audit trail; set `strictModel: true` in config to make a mismatch an error instead. |
+| `provenance.model.applied` / `.verified` | Selection is read back from the UI and, where possible, checked against the response wire. `strictModel: true` (default) makes failed verification an error. Setting it to false permits unverified results, explicitly marked here. |
 | `thread_id` | The provider's native thread UUID from its URL. Pass it as top-level `thread_id` to continue that thread; omit it for a fresh isolated thread. |
 | `provenance.final_state` | The picker label read *after* model and modes were both applied. The per-step labels are stale by then. |
 | `extraction` | Which tier produced the text: `wire` (the response body the page received — the model's own markdown, ChatGPT), `copy` (the provider's own markdown via its copy control), `dom-markdown` (rebuilt from elements — tables, fences and lists intact), or `rendered` (innerText, structure lost). |
@@ -196,7 +372,7 @@ honest about what happened rather than to look tidy:
 | `files` | Files the provider *generated*, downloaded to `downloads/`, with small text payloads inlined. |
 | `ledger` | Local JSONL audit path for this native thread. It stores file paths, sizes and SHA-256 hashes—not prompt/answer text or credentials. |
 | `browsed`, `sources` | What the UI actually did. Providers routinely answer from their weights despite being told to search. |
-| `provider_error` | `true` when the delivered text is the provider's own error notice ("Sorry, something went wrong") rather than an answer. Still a 200, still real content: the UI produced a message and this retrieved it, which is all the bridge promises. Retry-or-skip is your policy, and this flag means you needn't match on prose. |
+| `provider_error` | Retained in Session/CLI results; the HTTP API rejects recognised provider error notices with 502. Detection depends on observed provider wording and cannot recognise every possible non-answer. |
 | `usage` | Always zero. Token counts are not observable through a UI, and inventing them would be worse than admitting it. |
 
 ### Exporting a whole thread

@@ -14,6 +14,7 @@
     "examples/_client.py",
     "examples/hello.py",
     "examples/batch.py",
+    "examples/durable_batch.py",
     "config.example.json"
   ],
   "scripts": {
@@ -21,7 +22,8 @@
     "login": "node bin/uibridge.mjs login",
     "doctor": "node bin/uibridge.mjs doctor",
     "capture": "node bin/uibridge.mjs capture",
-    "test": "node --test test/unit.mjs",
+    "test": "node --test test/unit.mjs test/pool.mjs test/window.mjs test/api.mjs test/session.mjs test/reliability.mjs test/report-regressions.mjs",
+    "test:acceptance": "node test/acceptance.mjs",
     "test:live": "python test/live.py",
     "serve:headed": "node bin/uibridge.mjs serve --headed"
   },
@@ -29,6 +31,10 @@
     "node": ">=22"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "playwright": "^1.49.0"
+  },
+  "devDependencies": {
+    "openai": "^7.10.0"
   }
 }

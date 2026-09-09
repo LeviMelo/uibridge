@@ -9,8 +9,13 @@
 // `sleep` exists only as the poll interval inside `waitFor`, and in tooling.
 
 import { TimeoutError } from './errors.mjs'
+import { abortable, checkCancelled, currentSignal } from './cancel.mjs'
+import { setTimeout as delay } from 'node:timers/promises'
 
-export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+export const sleep = async (ms, signal = currentSignal()) => {
+  checkCancelled(signal)
+  try { await delay(ms, undefined, { signal }) } catch (err) { checkCancelled(signal); throw err }
+}
 
 /**
  * Poll `probe` until it returns truthy. Returns that value.
@@ -24,10 +29,12 @@ export async function waitFor(probe, { timeout = 30000, poll = 150, what = 'cond
   const deadline = Date.now() + timeout
   let lastErr = null
   while (Date.now() < deadline) {
+    checkCancelled()
     try {
       const v = await probe()
       if (v) return v
     } catch (e) {
+      checkCancelled()
       lastErr = e
     }
     await sleep(poll)
@@ -49,6 +56,7 @@ export async function waitStable(read, { checks = 3, timeout = 600000, poll = 15
   let last = null
   let same = 0
   while (Date.now() < deadline) {
+    checkCancelled()
     const v = await read().catch(() => last)
     same = v === last ? same + 1 : 0
     last = v
@@ -69,15 +77,16 @@ export async function waitStable(read, { checks = 3, timeout = 600000, poll = 15
 export class Mutex {
   #tail = Promise.resolve()
 
-  run(fn) {
-    const result = this.#tail.then(fn, fn)
+  run(fn, signal = currentSignal()) {
+    const invoke = () => { checkCancelled(signal); return fn() }
+    const result = this.#tail.then(invoke, invoke)
     // Swallow rejection on the CHAIN only, so one failure does not poison
     // every later waiter, while the caller still sees its own error.
     this.#tail = result.then(
       () => {},
       () => {}
     )
-    return result
+    return abortable(result, signal)
   }
 }
 
@@ -85,6 +94,7 @@ export class Mutex {
 export async function retry(fn, { attempts = 2, isRetryable = (e) => !!e.retryable, onRetry } = {}) {
   let last
   for (let i = 0; i < attempts; i++) {
+    checkCancelled()
     try {
       return await fn(i)
     } catch (e) {
@@ -121,15 +131,17 @@ export class Pacer {
   }
 
   /** Resolves when it is this caller's turn; returns the ms it waited. */
-  wait() {
+  wait(signal = currentSignal()) {
     const turn = this.#chain.then(async () => {
+      checkCancelled(signal)
       const now = Date.now()
       const delay = Math.max(0, this.#next - now)
-      this.#next = Math.max(now, this.#next) + this.#interval
-      if (delay) await sleep(delay)
+      if (delay) await sleep(delay, signal)
+      checkCancelled(signal)
+      this.#next = Date.now() + this.#interval
       return delay
     })
     this.#chain = turn.catch(() => {})
-    return turn
+    return abortable(turn, signal)
   }
 }

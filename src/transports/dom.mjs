@@ -29,9 +29,9 @@
 //    Download control fires a real browser download.
 
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
 import { Mutex, waitFor } from '../core/async.mjs'
 import { normalizeNewlines } from '../core/markdown.mjs'
+import { captureDownload } from './download.mjs'
 
 // Process-wide: the clipboard is a machine resource, not a per-tab one.
 const clipboard = new Mutex()
@@ -86,13 +86,14 @@ export async function readRenderedText(page, { blocks, text }, index) {
  * one shared fragment is enough to establish identity.
  */
 function sharesContent(copied, rendered) {
-  const squash = (s) => (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const squash = (s) => (s ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
   const a = squash(copied)
   const b = squash(rendered)
   if (!a || !b) return false
+  if (a === b || b.includes(a) || a.includes(b)) return true
   if (a.length < 24) return b.includes(a) || a.includes(b)
-  for (const at of [0.15, 0.4, 0.65, 0.85]) {
-    const start = Math.floor(a.length * at)
+  for (const at of [0, 0.15, 0.4, 0.65, 0.85, 1]) {
+    const start = Math.floor(Math.max(0, a.length - 24) * at)
     const frag = a.slice(start, start + 24)
     if (frag.length === 24 && b.includes(frag)) return true
   }
@@ -106,10 +107,15 @@ function sharesContent(copied, rendered) {
  * THIS response and not a stale or foreign one. On mismatch we return null so
  * the caller falls back, rather than returning another tab's text.
  */
-export async function copyMarkdown(page, { copyButton }, { expectLen = 0, rendered = '', pollMs = 150, log } = {}) {
+export async function copyMarkdown(page, { copyButton }, { expectLen = 0, rendered = '', pollMs = 150, log, scope, diagnostics = {} } = {}) {
   if (!copyButton) return null
   return clipboard.run(async () => {
+    let focus
     try {
+      diagnostics.phase = 'focus'
+      focus = await page.context().newCDPSession(page)
+      await focus.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(page.url()).origin })
       // navigator.clipboard.readText() REQUIRES a focused document. A pooled
       // tab sitting in the background is not focused, so the read rejects,
       // and extraction quietly falls back to lossy rendered text - tables
@@ -117,10 +123,21 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, render
       // Fronting the tab is safe here because the mutex already serialises
       // this section, so two tabs never fight over focus or the buffer.
       await page.bringToFront().catch(() => {})
-      await page.locator(copyButton).last().click({ timeout: 5000 })
+      // A successful click precedes the async clipboard write. Clear old
+      // content first, otherwise an earlier answer can pass fragment matching
+      // (especially a follow-up asking for one value from that earlier answer).
+      diagnostics.phase = 'clear'
+      const cleared = await page.evaluate(async () => {
+        await navigator.clipboard.writeText('')
+        return (await navigator.clipboard.readText()) === ''
+      })
+      if (!cleared) { diagnostics.reason = 'clipboard_clear_not_observed'; return null }
+      diagnostics.phase = 'copy_button'
+      await (scope ?? page).locator(copyButton).last().click({ timeout: 5000 })
+      diagnostics.phase = 'read'
       const text = await waitFor(
         async () => {
-          const t = await page.evaluate(() => navigator.clipboard.readText().catch(() => ''))
+          const t = await page.evaluate(() => navigator.clipboard.readText())
           return t && t.trim() ? t : null
         },
         { timeout: 2500, poll: pollMs, what: 'clipboard to fill' }
@@ -134,6 +151,7 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, render
       // request to the lossy path. Identity, not size: if a distinctive
       // fragment of the copy appears in what is on screen, it is ours.
       if (expectLen && !sharesContent(clean, rendered)) {
+        diagnostics.reason = 'clipboard_content_mismatch'
         log?.warn(
           `clipboard content does not match the response on screen ` +
             `(${clean.length} vs ${expectLen} chars); using rendered text`
@@ -141,8 +159,15 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, render
         return null
       }
       return clean
-    } catch {
+    } catch (err) {
+      diagnostics.reason = err.code ?? err.name ?? 'clipboard_failed'
+      log?.warn(`canonical copy failed during ${diagnostics.phase}: ${String(err.message).split('\n')[0].slice(0, 180)}`)
       return null
+    } finally {
+      if (focus) {
+        await focus.send('Emulation.setFocusEmulationEnabled', { enabled: false }).catch(() => {})
+        await focus.detach().catch(() => {})
+      }
     }
   })
 }
@@ -158,15 +183,15 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, render
  *   chip/name/type/open   the response-side chip and its controls
  *   download/close        the viewer overlay's toolbar controls
  */
-export async function downloadGeneratedFiles(page, spec, { dir = 'downloads', waitMs = 20000, downloadMs = 30000, inlineMaxBytes = 262144, pollMs = 150, log } = {}) {
+export async function downloadGeneratedFiles(page, spec, { dir = 'downloads', waitMs = 20000, downloadMs = 30000, inlineMaxBytes = 262144, pollMs = 150, log, scope = page, requestId } = {}) {
   if (!spec?.chip || !spec?.download) return []
-  if (spec.toolMarker && !(await count(page, spec.toolMarker))) return []
+  if (spec.toolMarker && !(await count(scope, spec.toolMarker))) return []
 
   // The chip is built server-side and lags the text. Bounded wait; a tool
   // response that produced no file simply falls through.
   let n = 0
   try {
-    n = await waitFor(async () => (await count(page, spec.chip)) || null, {
+    n = await waitFor(async () => (await count(scope, spec.chip)) || null, {
       timeout: waitMs,
       poll: pollMs,
       what: 'a generated-file chip',
@@ -179,7 +204,7 @@ export async function downloadGeneratedFiles(page, spec, { dir = 'downloads', wa
   const out = []
 
   for (let i = 0; i < n; i++) {
-    const chip = page.locator(spec.chip).nth(i)
+    const chip = scope.locator(spec.chip).nth(i)
     const declared = spec.name
       ? await chip.locator(spec.name).first().getAttribute('title').catch(() => null)
       : null
@@ -189,13 +214,8 @@ export async function downloadGeneratedFiles(page, spec, { dir = 'downloads', wa
 
     try {
       await chip.locator(spec.open ?? 'button').first().click({ timeout: 15000 })
-      const [dl] = await Promise.all([
-        page.waitForEvent('download', { timeout: downloadMs }),
-        page.locator(spec.download).first().click({ timeout: 15000 }),
-      ])
-      const name = dl.suggestedFilename() || declared || `generated-${i}`
-      const path = resolve(dir, name)
-      await dl.saveAs(path)
+      const { name, path } = await captureDownload(page,
+        () => page.locator(spec.download).first().click({ timeout: 15000 }), { dir, timeout: downloadMs })
       const bytes = statSync(path).size
       const entry = { name, path, bytes, type: kind?.trim() ?? null, text: null }
       // Inline small text payloads: a pipeline usually wants the rows, not a
@@ -207,7 +227,8 @@ export async function downloadGeneratedFiles(page, spec, { dir = 'downloads', wa
       log?.info(`retrieved generated file ${name} (${bytes} bytes)`)
     } catch (e) {
       log?.warn(`generated file ${declared ?? i} not retrievable: ${e.message.split('\n')[0]}`)
-      out.push({ name: declared, path: null, bytes: null, type: kind, error: 'retrieval failed' })
+      out.push({ name: declared, path: null, bytes: null, type: kind, error: 'retrieval failed',
+        failure: { code: e.code ?? 'download_failed', request_id: requestId ?? null, ...(e.detail ?? {}) } })
     }
     // Dismiss the overlay, or it hides the composer for the NEXT request -
     // which surfaces as a composer that exists but never becomes visible.

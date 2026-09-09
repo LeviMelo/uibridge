@@ -6,15 +6,19 @@
 // in a provider.
 
 import { existsSync, statSync } from 'node:fs'
+import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { attachBrowser } from './core/chrome.mjs'
 import { TabPool } from './core/pool.mjs'
 import { loadConfig, portFor, providerSettings } from './core/config.mjs'
 import { logger, requestId } from './core/log.mjs'
 import { BridgeError, ChallengeError, RequestError, SignedOutError } from './core/errors.mjs'
 import { signedOutMessage } from './core/auth.mjs'
-import { Pacer, retry, waitFor, waitStable } from './core/async.mjs'
+import { Mutex, Pacer, retry, waitFor, waitStable } from './core/async.mjs'
 import { providerClass, providerIds } from './providers/registry.mjs'
 import { recordThreadEvent } from './core/ledger.mjs'
+import { checkCancelled, withCancellation } from './core/cancel.mjs'
 
 export class Session {
   #ctx
@@ -24,12 +28,26 @@ export class Session {
   #log
   #pacer
   #continuationPacer
+  #threads = new Map()
+  #unavailable = false
+  #shutdown = new AbortController()
+
+  async #inThread(threadId, fn) {
+    if (!threadId) return fn()
+    const entry = this.#threads.get(threadId) ?? { lock: new Mutex(), users: 0 }
+    this.#threads.set(threadId, entry)
+    entry.users++
+    try { return await entry.lock.run(fn) } finally {
+      if (--entry.users === 0) this.#threads.delete(threadId)
+    }
+  }
 
   constructor({ provider, settings, ctx, pool, log }) {
     this.#provider = provider
     this.#settings = settings
     this.#ctx = ctx
     this.#pool = pool
+    ctx.on?.('close', () => { this.#unavailable = true })
     this.#log = log
     this.#pacer = new Pacer(settings.minIntervalMs ?? 0)
     this.#continuationPacer = new Pacer(settings.continuationIntervalMs ?? 0)
@@ -42,7 +60,7 @@ export class Session {
     const log = logger(id)
     const settings = providerSettings(cfg, id, Class.defaults)
     const url = Class.selectors.url
-    const { ctx } = await attachBrowser({
+    const { ctx, preparePage } = await attachBrowser({
       port: portFor(cfg, id, providerIds.indexOf(id)),
       userDataDir: settings.profileDir,
       headless: headless ?? settings.headless ?? cfg.headless,
@@ -52,12 +70,20 @@ export class Session {
     })
 
     const provider = new Class({ selectors: Class.selectors, settings: { ...settings, url }, log })
-    const pool = new TabPool(ctx, { max: settings.concurrency, name: `pool:${id}` })
+    const pool = new TabPool({ newPage: async () => {
+      const page = await ctx.newPage()
+      await preparePage(page)
+      return page
+    } }, { max: settings.concurrency, name: `pool:${id}` })
     return new Session({ provider, settings, ctx, pool, log })
   }
 
   get id() {
     return this.#provider.id
+  }
+
+  get available() {
+    return !this.#unavailable && (this.#ctx.browser?.()?.isConnected() ?? true)
   }
 
   get capabilities() {
@@ -117,7 +143,13 @@ export class Session {
    * occupy a tab and burn the full upload timeout before failing, so a
    * three-second mistake cost three minutes.
    */
-  async ask({ prompt, files = [], model = null, modes = {}, onProgress = null, threadId = null }) {
+  ask(options) {
+    const signal = options.signal ? AbortSignal.any([options.signal, this.#shutdown.signal]) : this.#shutdown.signal
+    return withCancellation(signal, () => this.#ask(options))
+  }
+
+  async #ask({ prompt, files = [], model = null, modes = {}, onProgress = null, threadId = null }) {
+    checkCancelled()
     if (!prompt || !prompt.trim()) throw new RequestError('prompt is empty')
 
     const resolved = files.map((f) => {
@@ -129,6 +161,20 @@ export class Session {
     const rid = requestId()
     const log = this.#log.child(rid)
     const started = Date.now()
+    const input = { characters: prompt.length, sha256: await textHash(prompt), transport: 'composer' }
+    let temporaryDir = null
+    if (this.#settings.maxComposerChars && prompt.length > this.#settings.maxComposerChars) {
+      temporaryDir = await mkdtemp(join(tmpdir(), 'uibridge-input-'))
+      const path = join(temporaryDir, `uibridge-request-${rid}.txt`)
+      try { await writeFile(path, prompt, 'utf8') } catch (err) {
+        await rm(temporaryDir, { recursive: true, force: true })
+        throw err
+      }
+      resolved.push(path)
+      input.transport = 'attachment'
+      prompt = `The attached file uibridge-request-${rid}.txt contains the complete request, including labelled message history and output-format instructions. Read the entire file and answer that request, using any other attached evidence it refers to. Follow its output-format instructions exactly. Do not summarize the request or the file unless the request asks for a summary.`
+      log.info(`using a text attachment for ${input.characters} input characters (editor limit ${this.#settings.maxComposerChars})`)
+    }
 
     // Retry only failures a second attempt can genuinely fix, and only once:
     //   compose_failed  the prompt never reached the composer
@@ -141,17 +187,19 @@ export class Session {
     // `provider_error: true` and the caller decides. Each attempt gets a
     // fresh tab, because withTab discards a failed one.
     const RETRYABLE = new Set(['compose_failed', 'submit_failed'])
-    return retry(
-      () => this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started }),
+    try { return await this.#inThread(threadId, () => retry(
+      () => this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started, input }),
       {
         attempts: 2,
         isRetryable: (e) => RETRYABLE.has(e.code),
         onRetry: (e) => log.warn(`retrying once after ${e.code}`),
       }
-    )
+    )) } finally {
+      if (temporaryDir) await rm(temporaryDir, { recursive: true, force: true }).catch((e) => log.warn(`could not remove temporary input: ${e.code}`))
+    }
   }
 
-  async #attempt({ prompt, files, model, modes, onProgress, threadId, rid, log, started }) {
+  async #attempt({ prompt, files, model, modes, onProgress, threadId, rid, log, started, input }) {
     const resolved = files
     // Pace BEFORE taking a tab, so a queued request holds nothing while it
     // waits and the spacing applies across the whole provider.
@@ -159,8 +207,7 @@ export class Session {
     const waited = await pacer.wait()
     if (waited > 1000) log.debug(`paced: waited ${(waited / 1000).toFixed(1)}s (minIntervalMs=${this.#pacer.intervalMs})`)
     return this.#pool.withTab(async (page) => {
-      const provider = this.#provider
-      provider.log = log
+      const provider = new this.#provider.constructor({ selectors: this.#provider.selectors, settings: this.#provider.settings, log })
 
       // The state, not a boolean: the caller is told WHAT was observed, which
       // is the difference between an argument and an instruction.
@@ -212,7 +259,7 @@ export class Session {
       const provenance = { model: null, modes: {}, final_state: null }
       if (model) {
         provenance.model = await provider.selectModel(page, model)
-        if (this.#settings.strictModel && provenance.model.verified === false) {
+        if (this.#settings.strictModel && provenance.model.verified !== true) {
           throw new BridgeError(
             `${this.id}: asked for "${model}" but the UI reports ` +
               `"${provenance.model.applied ?? 'unknown'}". Refusing rather than answering ` +
@@ -222,7 +269,8 @@ export class Session {
         }
       }
       for (const [key, on] of Object.entries(modes)) {
-        provenance.modes[key] = await provider.setMode(page, key, on)
+        provenance.modes[key] = { ...(await provider.setMode(page, key, on)), requested: on }
+        if (provenance.modes[key]?.verified === false) throw new BridgeError(`Requested mode ${key} was not applied`, { status: 502, code: 'mode_not_applied' })
       }
       // Read the UI's state ONCE MORE, after everything is applied. The
       // per-step labels are stale by now: on a combined picker the label
@@ -275,6 +323,7 @@ export class Session {
       phase('attach')
 
       const ctx = {
+        requestId: rid,
         responseTextsBefore: await provider.responseTexts(page).catch(() => []),
         turnsBefore: await provider.turnCount?.(page) ?? (await countTurns(page, provider)),
         lastResponseBefore: await provider.lastResponseText(page).catch(() => null),
@@ -282,12 +331,14 @@ export class Session {
         onProgress,
       }
       phase('baseline')
+      checkCancelled()
       await provider.submit(page, prompt, ctx)
       const tSubmit = Date.now()
       phase('submit')
 
       await provider.awaitCompletion(page, ctx)
       const result = await provider.extract(page, ctx)
+      checkCancelled()
 
       // DOM transports cannot expose reliable partial markdown, but still
       // participate in the streaming API with one final content update.
@@ -314,6 +365,9 @@ export class Session {
       // fact a methods section needs, and it outranks any picker label.
       if (result.sent_as) provenance.sent_as = result.sent_as
       if (result.sent_effort !== undefined) provenance.sent_effort = result.sent_effort ?? null
+      if (this.#settings.strictModel && provenance.model?.expected_slug && !result.model_slug) {
+        throw new BridgeError('The server did not identify the model that answered', { status: 502, code: 'model_unverified' })
+      }
       if (result.model_slug) {
         provenance.answered_by = result.model_slug
         const expected = provenance.model?.expected_slug
@@ -350,6 +404,7 @@ export class Session {
 
       const completed = {
         ...result,
+        input,
         thread_id: answeredThread,
         provenance,
         throttle_notice: throttled ?? null,
@@ -361,7 +416,7 @@ export class Session {
         const ledger = await recordThreadEvent(this.#settings.ledgerDir, {
           at: new Date().toISOString(), request_id: rid, provider: this.id,
           thread_id: answeredThread, requested_thread_id: requestedThread,
-          model, modes, inputs: resolved, outputs: result.files,
+          model, modes, provenance, input, inputs: resolved, outputs: result.files,
           result: { characters: result.text.length, sha256: await textHash(result.text), extraction: result.extraction, truncated: !!result.truncated, provider_error: !!result.provider_error },
         })
         completed.ledger = { path: ledger.path }
@@ -374,10 +429,11 @@ export class Session {
   }
 
   /** Export the complete active branch of one provider-native thread. */
-  async exportThread(threadId, { files = false } = {}) {
+  async exportThread(threadId, { files = false, signal } = {}) {
     if (!threadId) throw new RequestError('thread id is required')
-    return this.#pool.withTab(async (page) => {
-      const provider = this.#provider
+    const combined = signal ? AbortSignal.any([signal, this.#shutdown.signal]) : this.#shutdown.signal
+    return withCancellation(combined, () => this.#inThread(threadId, () => this.#pool.withTab(async (page) => {
+      const provider = new this.#provider.constructor({ selectors: this.#provider.selectors, settings: this.#provider.settings, log: this.#log })
       await provider.prepareAuth(page)
       const session = await provider.sessionState(page)
       if (session.state === 'challenge') throw new ChallengeError(this.id, session.evidence?.challengeText ?? 'a verification challenge')
@@ -392,10 +448,12 @@ export class Session {
       // text should not pay for that in requests to the site.
       if (files) exported.files = await provider.downloadThreadFiles(page, exported.messages)
       return exported
-    })
+    })))
   }
 
   async close() {
+    this.#unavailable = true
+    this.#shutdown.abort(new BridgeError('Session is closed', { status: 503, code: 'session_closed' }))
     await this.#pool.close()
   }
 }

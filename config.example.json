@@ -1,5 +1,3 @@
-// Copy to config.json in your uibridge home (`uibridge paths`) to override
-// defaults. Every key here is optional; the shipped defaults are measured.
 {
   "port": 8477,
   "host": "127.0.0.1",
@@ -7,8 +5,13 @@
   "headless": "offscreen",
   "profileDir": ".profiles",
   "downloadDir": "downloads",
+  "requestDir": ".uibridge/requests",
+  "maxPendingRequests": 64,
+  "requestTimeoutMs": 900000,
   "provider": {
     "concurrency": 2,
+    "strictModel": true,
+    "maxComposerChars": 32000,
     "responseTimeoutMs": 600000,
     "pollMs": 150
   },

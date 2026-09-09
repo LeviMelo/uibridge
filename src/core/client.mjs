@@ -97,11 +97,11 @@ export async function ensureDaemon(cfg, { autostart = true, log } = {}) {
  * the whole point of having them; flattening them into "request failed"
  * would make the CLI less informative than the HTTP interface it wraps.
  */
-export async function daemonPost(url, body, { timeoutMs = 20 * 60 * 1000 } = {}) {
+export async function daemonPost(url, body, { timeoutMs = 20 * 60 * 1000, headers = {}, method = 'POST' } = {}) {
   const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    method,
+    headers: { 'content-type': 'application/json', ...headers },
+    body: method === 'GET' ? undefined : JSON.stringify(body),
     signal: AbortSignal.timeout(timeoutMs),
   })
   const payload = await res.json().catch(() => null)

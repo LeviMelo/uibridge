@@ -27,8 +27,9 @@
 // name that arrives as "../../.profiles/gemini/Cookies" would otherwise be a
 // path-traversal write - and the model chooses that name.
 
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { resolve, basename } from 'node:path'
+import { mkdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { basename } from 'node:path'
+import { reserveOutputFile } from '../core/output-file.mjs'
 
 /**
  * Links the model wrote in a private scheme, e.g. sandbox:/mnt/data/x.csv.
@@ -95,20 +96,9 @@ export function safeFileName(name, fallback = 'download.bin') {
     const ext = dot > 0 ? n.slice(dot, dot + 12) : ''
     n = n.slice(0, 180 - ext.length) + ext
   }
-  return n || fallback
+  return n || (fallback === 'download.bin' ? fallback : safeFileName(fallback))
 }
 
-/** Avoid clobbering: a.csv, a (2).csv, a (3).csv - like a browser would. */
-function uniquePath(dir, name, taken) {
-  const dot = name.lastIndexOf('.')
-  const stem = dot > 0 ? name.slice(0, dot) : name
-  const ext = dot > 0 ? name.slice(dot) : ''
-  let candidate = name
-  let n = 2
-  while (taken.has(candidate.toLowerCase())) candidate = `${stem} (${n++})${ext}`
-  taken.add(candidate.toLowerCase())
-  return resolve(dir, candidate)
-}
 
 /**
  * Trigger a download in the page and keep the bytes the page received.
@@ -181,8 +171,11 @@ export async function captureDownload(
 
     const name = safeFileName(declared ?? filenameFromDisposition(res.headers['content-disposition']) ?? fallbackName, fallbackName)
     mkdirSync(dir, { recursive: true })
-    const path = uniquePath(dir, name, taken)
-    writeFileSync(path, res.buffer)
+    const path = reserveOutputFile(dir, name, taken)
+    try { writeFileSync(path, res.buffer) } catch (err) {
+      try { unlinkSync(path) } catch {}
+      throw err
+    }
     log?.debug(`saved generated file ${name} (${res.buffer.length} bytes) from the wire`)
     return { name, path, bytes: res.buffer.length, mime, source: 'wire' }
   } finally {

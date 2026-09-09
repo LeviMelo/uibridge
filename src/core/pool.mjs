@@ -10,6 +10,8 @@
 // clever pooling (handing out a broken tab) is worse than opening a new one.
 
 import { logger } from './log.mjs'
+import { BridgeError } from './errors.mjs'
+import { abortable, checkCancelled, currentSignal } from './cancel.mjs'
 
 export class TabPool {
   #ctx
@@ -18,10 +20,14 @@ export class TabPool {
   #busy = new Set()
   #waiters = []
   #log
+  #opening = new Set()
+  #closed = false
+  #closing
 
   constructor(ctx, { max = 2, name = 'pool' } = {}) {
     this.#ctx = ctx
-    this.#max = Math.max(1, max)
+    if (!Number.isInteger(max) || max < 1) throw new RangeError('pool max must be a positive integer')
+    this.#max = max
     this.#log = logger(name)
   }
 
@@ -29,10 +35,25 @@ export class TabPool {
     return { tabs: this.#idle.length + this.#busy.size, busy: this.#busy.size, waiting: this.#waiters.length }
   }
 
-  async acquire() {
-    const page = this.#idle.pop() ?? (this.#total < this.#max ? await this.#open() : await this.#queue())
-    this.#busy.add(page)
-    return page
+  async acquire(signal = currentSignal()) {
+    checkCancelled(signal)
+    if (this.#closed) throw this.#closedError()
+    const result = new Promise((resolve, reject) => {
+      const waiter = { signal,
+        resolve: (page) => { cleanup(); resolve(page) },
+        reject: (err) => { cleanup(); reject(err) },
+      }
+      const cancel = () => {
+        const index = this.#waiters.indexOf(waiter)
+        if (index !== -1) this.#waiters.splice(index, 1)
+        try { checkCancelled(signal) } catch (err) { waiter.reject(err) }
+      }
+      const cleanup = () => signal?.removeEventListener('abort', cancel)
+      signal?.addEventListener('abort', cancel, { once: true })
+      this.#waiters.push(waiter)
+    })
+    this.#pump()
+    return result
   }
 
   /**
@@ -44,60 +65,87 @@ export class TabPool {
    * Tabs are cheap; a poisoned pool is not.
    */
   release(page, { discard = false } = {}) {
-    this.#busy.delete(page)
+    if (!this.#busy.delete(page)) return
     if (discard && !page.isClosed()) {
       this.#log.debug('discarding a tab after a failed request')
       page.close().catch(() => {})
       return this.#pump()
     }
     if (page.isClosed()) return this.#pump()
-    const next = this.#waiters.shift()
-    if (next) return next(page)
     this.#idle.push(page)
+    this.#pump()
   }
 
   /**
    * Borrow a tab for `fn`. A tab is always returned; one whose request threw
    * is discarded rather than recycled.
    */
-  async withTab(fn) {
-    const page = await this.acquire()
+  async withTab(fn, { signal = currentSignal() } = {}) {
+    const page = await this.acquire(signal)
     let failed = false
+    const cancel = () => { page.close().catch(() => {}) }
+    signal?.addEventListener('abort', cancel, { once: true })
     try {
-      return await fn(page)
+      checkCancelled(signal)
+      return await abortable(Promise.resolve().then(() => { checkCancelled(signal); return fn(page) }), signal)
     } catch (e) {
       failed = true
       throw e
     } finally {
+      signal?.removeEventListener('abort', cancel)
       this.release(page, { discard: failed })
     }
   }
 
-  async close() {
-    for (const p of [...this.#idle, ...this.#busy]) await p.close().catch(() => {})
+  close() {
+    if (this.#closing) return this.#closing
+    this.#closed = true
+    for (const w of this.#waiters.splice(0)) w.reject(this.#closedError())
+    const pages = [...this.#idle, ...this.#busy]
     this.#idle = []
     this.#busy.clear()
-    for (const w of this.#waiters.splice(0)) w(null)
+    this.#closing = Promise.allSettled([
+      ...pages.map((p) => p.close()), ...this.#opening,
+    ]).then(() => {})
+    return this.#closing
   }
 
   get #total() {
-    return this.#idle.length + this.#busy.size
+    return this.#idle.length + this.#busy.size + this.#opening.size
   }
 
-  async #open() {
-    const page = await this.#ctx.newPage()
-    this.#log.debug(`opened tab (${this.#total + 1}/${this.#max})`)
-    return page
-  }
-
-  #queue() {
-    return new Promise((res) => this.#waiters.push(res))
+  #closedError() {
+    return new BridgeError('Tab pool is closed', { status: 503, code: 'pool_closed' })
   }
 
   /** A closed tab freed capacity: let a waiter open a fresh one. */
-  async #pump() {
-    if (!this.#waiters.length || this.#total >= this.#max) return
-    const next = this.#waiters.shift()
-    next(await this.#open())
+  #pump() {
+    if (this.#closed) return
+    while (this.#waiters.length) {
+      const page = this.#idle.pop()
+      if (page) {
+        if (page.isClosed()) continue
+        this.#busy.add(page)
+        this.#waiters.shift().resolve(page)
+        continue
+      }
+      if (this.#total >= this.#max) return
+      const next = this.#waiters.shift()
+      // Reserve capacity before newPage yields. Deliver ownership before
+      // resolving the waiter so another acquire cannot steal its slot.
+      const opening = Promise.resolve().then(() => this.#ctx.newPage()).then(async (page) => {
+        if (this.#closed || next.signal?.aborted) {
+          if (this.#closed) next.reject(this.#closedError())
+          await page.close().catch(() => {})
+        } else {
+          this.#busy.add(page)
+          next.resolve(page)
+        }
+      }, (err) => next.reject(err)).finally(() => {
+        this.#opening.delete(opening)
+        this.#pump()
+      })
+      this.#opening.add(opening)
+    }
   }
 }

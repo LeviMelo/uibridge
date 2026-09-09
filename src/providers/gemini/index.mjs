@@ -32,6 +32,9 @@ export default class GeminiProvider extends DomProvider {
 
   /** Provider-specific defaults, overridable from config.json. */
   static defaults = {
+    // Measured 2026-09-07: Quill retains only 32,000 characters. Send larger
+    // requests as a temporary UTF-8 attachment rather than losing the tail.
+    maxComposerChars: 32000,
     // Five identical reads. Gemini streams in bursts with visible pauses, and
     // fewer checks ends a read inside one of those pauses.
     settleChecks: 5,

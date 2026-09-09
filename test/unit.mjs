@@ -261,7 +261,8 @@ test('readAttachments / readModes validate shape', () => {
   assert.deepEqual(readAttachments({}), [])
   assert.throws(() => readAttachments({ attachments: 'a.csv' }), RequestError)
   assert.throws(() => readAttachments({ attachments: [1] }), RequestError)
-  assert.deepEqual(readModes({ modes: { thinking: 1 } }), { thinking: true })
+  assert.deepEqual(readModes({ modes: { thinking: true } }), { thinking: true })
+  assert.throws(() => readModes({ modes: { thinking: 'false' } }), RequestError)
   assert.throws(() => readModes({ modes: [] }), RequestError)
 })
 
@@ -347,6 +348,21 @@ test('HTTP API rejects an unknown model before opening a browser session', async
   } finally {
     await app.close()
   }
+})
+
+test('malformed requests return 400 without opening a browser', async () => {
+  const app = createApp({ defaultProvider: 'gemini' })
+  await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve))
+  try {
+    for (const body of [null, [], 'hello', 42, { messages: [null] },
+      { messages: [{ content: [null] }] }, { messages: [{ content: [{ text: 42 }] }] }]) {
+      const response = await fetch(`http://127.0.0.1:${app.server.address().port}/v1/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      })
+      assert.equal(response.status, 400)
+      assert.equal((await response.json()).error.type, 'invalid_request')
+    }
+  } finally { await app.close() }
 })
 
 test('errors carry actionable status codes', () => {

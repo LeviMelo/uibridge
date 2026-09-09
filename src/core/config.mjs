@@ -49,6 +49,9 @@ const DEFAULTS = {
   downloadDir: 'downloads',
   ledgerDir: '.uibridge/threads',
   exportDir: '.uibridge/exports',
+  requestDir: '.uibridge/requests',
+  maxPendingRequests: 64,
+  requestTimeoutMs: 900000,
   // HEADLESS BY DEFAULT. This runs as a background service for other
   // programs on the machine; a chat window flashing open on every call is
   // not something a caller asked for. Signing in is the exception - that is
@@ -61,12 +64,16 @@ const DEFAULTS = {
   // MEASURED: ChatGPT serves an anonymous session to true headless even with
   // valid cookies, so its own provider block pins 'offscreen'.
   headless: process.env.UIBRIDGE_HEADED ? false : 'offscreen',
+  windowModeOverride: process.env.UIBRIDGE_HEADED ? false : undefined,
   defaultProvider: 'gemini',
   // One debugging port per provider, derived from this base, so restarts
   // reattach to the browser that is already running.
   basePort: 9333,
   provider: {
     concurrency: 2,
+    // Large rich-text pastes can truncate (Gemini) or stall the editor.
+    // Carry the complete request in a temporary UTF-8 attachment instead.
+    maxComposerChars: 32000,
     // A fresh conversation per request: no shared context, and model choice
     // actually takes effect (switching mid-thread is unreliable).
     newChatPerRequest: true,
@@ -96,7 +103,7 @@ const DEFAULTS = {
     // true : it becomes an error. Use this for a pipeline where provenance
     //        integrity matters more than getting an answer - a systematic
     //        review must not attribute a row to a model that did not write it.
-    strictModel: false,
+    strictModel: true,
     // Minimum spacing between request STARTS on a provider, across all its
     // tabs. A burst of fresh conversations trips these sites' throttling,
     // and a batch pipeline is exactly the caller that would burst. Per
@@ -134,6 +141,7 @@ export function providerSettings(cfg, id, providerDefaults = {}) {
   // headless and ChatGPT does not, and forcing both to the weaker setting
   // would cost a window nobody asked for.
   s.headless = s.headless ?? cfg.headless
+  if (cfg.windowModeOverride !== undefined) s.headless = cfg.windowModeOverride
   s.downloadDir = resolve(HOME, s.downloadDir ?? cfg.downloadDir)
   s.profileDir = resolve(HOME, cfg.profileDir, id)
   s.ledgerDir = resolve(HOME, cfg.ledgerDir)

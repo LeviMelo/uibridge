@@ -30,6 +30,7 @@
 // first and decoded once.
 
 import { TimeoutError } from '../core/errors.mjs'
+import { checkCancelled, currentSignal } from '../core/cancel.mjs'
 
 const taps = new WeakMap()
 
@@ -282,16 +283,25 @@ class Capture {
   async #until(test, timeout, what) {
     const deadline = Date.now() + timeout
     while (true) {
+      checkCancelled()
       const v = test()
       if (v) return v
       const left = deadline - Date.now()
       if (left <= 0) throw new TimeoutError(what, timeout)
-      await new Promise((r) => {
-        const t = setTimeout(r, Math.min(left, 500))
-        this.#waiters.push(() => {
-          clearTimeout(t)
-          r()
-        })
+      await new Promise((resolve, reject) => {
+        const signal = currentSignal()
+        const cleanup = () => {
+          clearTimeout(timer)
+          signal?.removeEventListener('abort', cancel)
+          const index = this.#waiters.indexOf(wake)
+          if (index !== -1) this.#waiters.splice(index, 1)
+        }
+        const wake = () => { cleanup(); resolve() }
+        const cancel = () => { cleanup(); try { checkCancelled(signal) } catch (err) { reject(err) } }
+        const timer = setTimeout(wake, Math.min(left, 500))
+        this.#waiters.push(wake)
+        signal?.addEventListener('abort', cancel, { once: true })
+        if (signal?.aborted) cancel()
       })
     }
   }
