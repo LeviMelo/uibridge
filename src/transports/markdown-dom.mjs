@@ -89,7 +89,10 @@ export async function reconstructMarkdown(page, { blocks, text }, index) {
         return out
       }
 
-      const cell = (el) => inlineOf(el).replace(/\s+/g, ' ').trim().replace(/\|/g, '\|')
+      // A literal pipe inside a cell has to be escaped or it splits the row.
+      // This said `'\|'`, which in a JS string is just `'|'` - a no-op that
+      // left every such table silently malformed.
+      const cell = (el) => inlineOf(el).replace(/\s+/g, ' ').trim().replace(/\|/g, '\\|')
 
       const tableOf = (t) => {
         const rows = [...t.querySelectorAll('tr')]
@@ -127,7 +130,26 @@ export async function reconstructMarkdown(page, { blocks, text }, index) {
           .filter((li) => li.tagName.toLowerCase() === 'li')
           .map((li, i) => {
             const nested = [...li.children].filter((c) => /^(ul|ol)$/i.test(c.tagName))
-            const own = inlineOf(li)
+            // THIS ITEM'S OWN TEXT, WITHOUT ITS SUBLIST.
+            //
+            // inlineOf recurses into any element it does not special-case,
+            // and ul/ol/li are not special-cased - so `inlineOf(li)` on an
+            // item that contains a nested list returned the parent's text
+            // WITH every child item concatenated onto it, and then the
+            // children were rendered again underneath. Measured on
+            // `<ul><li>parent<ul><li>child A</li><li>child B</li></ul></li></ul>`:
+            //   - parentchild Achild B
+            //     - child A
+            //     - child B
+            // Every nested list was corrupted this way, on the one tier whose
+            // whole reason to exist is that structure survives. inlineOf is
+            // left alone - its recursion is correct for its other callers -
+            // and the sublists are pruned from a CLONE, never from the page.
+            const solo = li.cloneNode(true)
+            for (const sub of [...solo.children]) {
+              if (/^(ul|ol)$/i.test(sub.tagName)) sub.remove()
+            }
+            const own = inlineOf(solo)
               .replace(/\s+/g, ' ')
               .trim()
             const marker = ordered ? `${i + 1}.` : '-'

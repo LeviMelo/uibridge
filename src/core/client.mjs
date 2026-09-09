@@ -18,6 +18,20 @@ import { HOME, ROOT } from './config.mjs'
 import { BridgeError } from './errors.mjs'
 import { identify, isUibridge } from './protocol.mjs'
 
+/**
+ * Are these two paths the same directory?
+ *
+ * Windows filesystems are case-insensitive, and the two spellings being
+ * compared arrive from different places - one from the daemon's own config,
+ * one from this process's environment - so a `c:` against a `C:` is routine
+ * and means nothing. Case is preserved everywhere else; only the comparison
+ * is relaxed, and only on the platform where it is correct to relax it.
+ */
+const samePath = (a, b) =>
+  process.platform === 'win32'
+    ? resolve(a).toLowerCase() === resolve(b).toLowerCase()
+    : resolve(a) === resolve(b)
+
 const base = (cfg) => `http://${cfg.host}:${cfg.port}`
 
 async function get(url, timeoutMs) {
@@ -50,7 +64,11 @@ export async function daemonHealth(cfg, timeoutMs = 700) {
   const kind = identify(payload)
   if (kind === 'absent') return null
   if (kind === 'ours') {
-    if (payload.home && resolve(payload.home) !== resolve(HOME)) {
+    // Windows paths are case-insensitive, and the two spellings arrive from
+    // different places - one from the daemon's own config, one from this
+    // process's environment. A `c:` against a `C:` is the same directory,
+    // and refusing it would be a false alarm the user cannot act on.
+    if (payload.home && !samePath(payload.home, HOME)) {
       throw new BridgeError(
         `The uibridge on ${cfg.host}:${cfg.port} is serving a different state directory:
 ` +

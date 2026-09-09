@@ -17,6 +17,8 @@
   "_port": "The daemon and the OpenAI-compatible API. Give a second uibridge on the same machine its own port.",
 
   "defaultProvider": "gemini",
+  "_strictParameters": "Refuse OpenAI parameters a chat UI cannot honour (temperature, top_p, seed...) instead of accepting them, ignoring them, and naming them back in _uibridge.unsupported_parameters. Off by default because most callers would rather the request went through.",
+  "strictParameters": false,
   "basePort": 9333,
   "_basePort": "First Chrome remote-debugging port; each provider takes the next one. Change if something else on this machine uses 9333.",
 

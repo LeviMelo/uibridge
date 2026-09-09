@@ -18,12 +18,11 @@ import { chromium } from 'playwright'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { BridgeError } from './errors.mjs'
-import { sleep, waitFor } from './async.mjs'
+import { waitFor } from './async.mjs'
 import { logger } from './log.mjs'
 import { manageWindows } from './window.mjs'
 
 const log = logger('chrome')
-const spawned = new Map() // port -> child
 
 const CANDIDATES = [
   process.env.UIBRIDGE_CHROME,
@@ -89,7 +88,11 @@ async function launch(port, userDataDir, headless) {
   log.debug(`launching chrome on port ${port} (profile ${userDataDir})`)
   const child = spawn(chromePath(), args, { detached: true, stdio: 'ignore' })
   child.unref()
-  spawned.set(port, child)
+  // NOT TRACKED FOR CLEANUP, DELIBERATELY. Chrome we launch is left
+  // running: it holds the profile, and the next run reattaches to its
+  // debugging port instead of paying the startup cost again. There was a
+  // killSpawned() here for a long time that nothing ever called, which
+  // read as an oversight rather than as the policy it actually is.
 
   await waitFor(() => debuggerUp(port), {
     timeout: 45000,
@@ -138,16 +141,3 @@ export async function attachBrowser({ port, userDataDir, headless = false, clipb
   return { browser, ctx, launched: fresh, preparePage }
 }
 
-/** Kill only Chrome instances we started. The user's own browser is theirs. */
-export async function killSpawned() {
-  for (const [port, child] of spawned) {
-    try {
-      process.kill(child.pid)
-      log.debug(`killed chrome on ${port}`)
-    } catch {
-      /* already gone */
-    }
-  }
-  spawned.clear()
-  await sleep(0)
-}

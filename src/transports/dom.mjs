@@ -91,7 +91,11 @@ function sharesContent(copied, rendered) {
   const b = squash(rendered)
   if (!a || !b) return false
   if (a === b || b.includes(a) || a.includes(b)) return true
-  if (a.length < 24) return b.includes(a) || a.includes(b)
+  // Containment was already ruled out on the line above, so this can only
+  // ever be false. Said plainly, rather than left looking like a second
+  // chance to match. (Whether a SHORT answer deserves a looser test is a
+  // behaviour question for the live extraction path, not a tidy-up.)
+  if (a.length < 24) return false
   for (const at of [0, 0.15, 0.4, 0.65, 0.85, 1]) {
     const start = Math.floor(Math.max(0, a.length - 24) * at)
     const frag = a.slice(start, start + 24)

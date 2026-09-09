@@ -194,6 +194,11 @@ relitigate them.
 
 ## 3. Architecture
 
+> **This tree is a snapshot from when it was written, not a live map.**
+> Ten modules have been added since. For the current layout see the
+> repository map in `README.md`; for how the two UIs actually behave see
+> `docs/UI-RECON.md`.
+
 Two things vary independently, and keeping them apart is the design:
 
 - **Actuation** - driving the UI: type, submit, pick a model, attach a file.
@@ -597,7 +602,7 @@ quirks in `providers/<id>/index.mjs`; anything reusable in `core/` or
 **Environment**: Windows, Chrome via CDP, Playwright 1.63, Node 22.
 Files are CRLF (`core.autocrlf=true`). Gitignored: `.profiles/` (live
 sessions), `testdata/recon/` and `testdata/capture/` (raw bodies carry
-tokens), `downloads/`, `_*.mjs` (scratch probes).
+tokens), `downloads/`, `/_*` (scratch probes).
 
 **A trap specific to this environment**: a bash heredoc feeding python
 strips backslashes, and a Write tool call once turned `\x00-\x1f` into

@@ -81,6 +81,10 @@ const DEFAULTS = {
   headless: process.env.UIBRIDGE_HEADED ? false : 'offscreen',
   windowModeOverride: process.env.UIBRIDGE_HEADED ? false : undefined,
   defaultProvider: 'gemini',
+  // Documented in README as the way to get the refusal back for OpenAI
+  // parameters a chat UI has no knob for. It was read but never defaulted,
+  // so no config file could set it and the branch was unreachable.
+  strictParameters: false,
   // One debugging port per provider, derived from this base, so restarts
   // reattach to the browser that is already running.
   basePort: 9333,

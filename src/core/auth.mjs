@@ -26,11 +26,6 @@
 
 const NL = String.fromCharCode(10)
 
-/** Read a nested field, e.g. "user.email", without throwing on a gap. */
-function dig(obj, path) {
-  return path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj)
-}
-
 /**
  * Gather every signal, ask no questions about what they mean.
  *

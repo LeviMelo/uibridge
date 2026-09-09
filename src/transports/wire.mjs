@@ -251,7 +251,10 @@ function snapshot(rec) {
     ok: rec.status != null && rec.status >= 200 && rec.status < 300 && !rec.error,
     error: rec.error,
     done: rec.done,
-    bytes: Buffer.byteLength(body),
+    // The BUFFER's length, not the decoded string's: they differ for any
+    // non-ASCII or binary body, and this field describes what arrived on
+    // the wire rather than what it decoded to.
+    bytes: buffer.length,
     body,
   }
 }

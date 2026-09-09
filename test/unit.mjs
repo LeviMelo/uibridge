@@ -1434,8 +1434,21 @@ test('every error code this build can raise is documented', async () => {
   const readme = readFileSync(join(ROOT, 'README.md'), 'utf8')
   const undocumented = new Set()
   for (const f of files) {
-    for (const m of readFileSync(f, 'utf8').matchAll(/code[:=]\s*'([a-z_]{4,})'/g)) {
+    const src = readFileSync(f, 'utf8')
+    // TWO PASSES, because the single-quote-immediately-after form missed the
+    // codes most worth catching. `code: limited ? 'rate_limited' :
+    // 'upstream_refused'` and `code: err.code ?? 'download_save_failed'` both
+    // slipped through the original pattern, so three real, raisable codes sat
+    // undocumented while this test reported a clean sheet. The second pass
+    // takes the whole expression after `code:` and pulls every snake_case
+    // literal out of it, which catches ternaries and `??` fallbacks alike.
+    for (const m of src.matchAll(/code[:=]\s*'([a-z_]{4,})'/g)) {
       if (!readme.includes('`' + m[1] + '`')) undocumented.add(m[1])
+    }
+    for (const m of src.matchAll(/\bcode\s*[:=]\s*([^,}\n]+)/g)) {
+      for (const lit of m[1].matchAll(/'([a-z][a-z_]{3,})'/g)) {
+        if (!readme.includes('`' + lit[1] + '`')) undocumented.add(lit[1])
+      }
     }
   }
   assert.deepEqual([...undocumented].sort(), [], 'add these to the Errors table in README.md')
@@ -1493,7 +1506,7 @@ test('every provider path follows cfg.home, not the process-wide one', async () 
 const sweepRow = (id, ordinal, role, text) => ({
   id, ordinal, role, text,
   branch: null, model_slug: null,
-  links: [], media: [], fileControls: [], attachments: [],
+  links: [], media: [], file_controls: [], attachments: [],
 })
 // One screenful, nothing to scroll: reached_top and reached_bottom both hold.
 const stillPage = (rows) => ({
@@ -1548,4 +1561,55 @@ test('a provider that publishes no turn numbers is judged on scroll evidence alo
   assert.equal(r.evidence.first_turn, null)
   assert.equal(r.evidence.turn_gaps, null)
   assert.equal(r.complete, true)
+})
+
+
+// THE SETTLE FINGERPRINT AND THE MERGE HAVE TO AGREE, OR AN ANNEX VANISHES.
+//
+// Both halves were wrong at once on 2026-09-09: the fingerprint read
+// `row.fileControls` while STEP emits `file_controls`, so that term was a
+// constant 0 and a reading was called settled while a download control was
+// still rendering; and mergeReading replaced a stored row only when the new
+// one had LONGER TEXT, so even when the fuller row did arrive it was thrown
+// away. Either bug alone is enough to export a message without the file it
+// carries.
+const pageThatFillsIn = (readings) => {
+  let i = 0
+  return {
+    evaluate: async () => {
+      const rows = readings[Math.min(i, readings.length - 1)]
+      i++
+      return { rows, scroll: { top: 0, max: 0, height: 600, viewport: 600 }, mounted: rows.length }
+    },
+  }
+}
+
+test('a download control that appears only on a later reading still reaches the export', async () => {
+  const bare = [sweepRow('m1', 1, 'assistant', 'here is your file')]
+  const withFile = [{ ...sweepRow('m1', 1, 'assistant', 'here is your file'), file_controls: ['Download out.csv'] }]
+  // Same text throughout, so ONLY the richer-axis merge can carry it through.
+  const r = await sweepThread(pageThatFillsIn([bare, bare, withFile, withFile, withFile, withFile, withFile]),
+    { messageNode: 'x', idAttr: 'id' }, { settleMs: 1 })
+  assert.deepEqual(r.messages[0].file_controls, ['Download out.csv'],
+    'the file control must survive into the export, not be dropped as "no longer text"')
+})
+
+test('an attachment that appears only on a later reading still reaches the export', async () => {
+  const bare = [sweepRow('u1', 1, 'user', 'read the annex')]
+  const withAnnex = [{ ...sweepRow('u1', 1, 'user', 'read the annex'), attachments: [{ label: 'annex.csv' }] }]
+  const r = await sweepThread(pageThatFillsIn([bare, bare, withAnnex, withAnnex, withAnnex, withAnnex, withAnnex]),
+    { messageNode: 'x', idAttr: 'id' }, { settleMs: 1 })
+  assert.deepEqual(r.messages[0].attachments, [{ label: 'annex.csv' }])
+})
+
+test('a shorter later reading never truncates the text it already had', async () => {
+  // The opposite failure: a row caught mid-render can carry one more chip AND
+  // less text. Merging per axis has to keep the longer text anyway.
+  const store = new Map()
+  const contract = { messageNode: 'x', idAttr: 'id' }
+  mergeReading(store, [], [{ id: 'a', role: 'assistant', text: 'the complete answer', attachments: [], file_controls: [] }], contract)
+  mergeReading(store, [], [{ id: 'a', role: 'assistant', text: 'the comp', attachments: [], file_controls: ['Download x.csv'] }], contract)
+  const kept = store.get('a')
+  assert.equal(kept.text, 'the complete answer', 'the fuller text must win')
+  assert.deepEqual(kept.file_controls, ['Download x.csv'], 'and the new control must still be picked up')
 })

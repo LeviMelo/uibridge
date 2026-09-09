@@ -63,7 +63,10 @@ export async function captureDownload(page, click, { dir, timeout = 30000 } = {}
           status: 502, code: err.code ?? 'download_save_failed', detail: { source_exists: existsSync(source), artifact_id: item.guid },
         })
       }
-      unlinkSync(source)
+      // The staged copy is disposable once `path` holds the bytes, so a
+      // failure to remove it must never be reported as a failed retrieval:
+      // the file the caller asked for is already on disk.
+      try { unlinkSync(source) } catch {}
       return { name, path }
     } finally {
       if (item && state !== 'completed') await browser.send('Browser.cancelDownload', { guid: item.guid }).catch(() => {})

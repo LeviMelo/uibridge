@@ -286,8 +286,34 @@ export function mergeReading(store, order, rows, contract) {
     if (!prior) {
       store.set(key, { ...row, key, stable_id: stable })
       added++
-    } else if ((row.text ?? '').length > (prior.text ?? '').length) {
-      store.set(key, { ...prior, ...row, key, stable_id: stable })
+    } else {
+      // KEEP THE RICHEST VALUE ON EACH AXIS, INDEPENDENTLY.
+      //
+      // This used to replace the stored row only when the new one had LONGER
+      // TEXT, which quietly threw away everything else. A message is mounted
+      // before it is finished rendering, and the upward hydration pass merges
+      // raw (unsettled) readings - so the thinnest version of a row routinely
+      // lands first. Measured 2026-09-09: merging a row with an attachment
+      // and a download control on top of an identical-text row without them
+      // exported `attachments: []` and `file_controls: []`. That is how a
+      // thread's own annex went missing from its export.
+      //
+      // Merging per axis rather than replacing wholesale also avoids the
+      // opposite bug: a mid-render row can carry one more chip AND shorter
+      // text, and must not be allowed to truncate the answer.
+      const longer = (a, b) => ((b ?? '').length > (a ?? '').length ? b : a)
+      const fuller = (a, b) => ((b?.length ?? 0) > (a?.length ?? 0) ? b : a)
+      store.set(key, {
+        ...prior,
+        ...row,
+        text: longer(prior.text, row.text),
+        attachments: fuller(prior.attachments, row.attachments),
+        file_controls: fuller(prior.file_controls, row.file_controls),
+        media: fuller(prior.media, row.media),
+        links: fuller(prior.links, row.links),
+        key,
+        stable_id: stable,
+      })
     }
   }
   if (order) stitchRun(order, readingKeys(rows, contract))
@@ -368,7 +394,7 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
   // row into the fingerprint makes "settled" mean the content stopped
   // changing, not merely that the same messages are present.
   const shape = (row) =>
-    `${row.attachments?.length ?? 0}a${row.fileControls?.length ?? 0}f${row.media?.length ?? 0}m${(row.text ?? '').length}`
+    `${row.attachments?.length ?? 0}a${row.file_controls?.length ?? 0}f${row.media?.length ?? 0}m${(row.text ?? '').length}`
   const fingerprint = (r) =>
     `${r.scroll.top}:${readingKeys(r.rows, contract).join('|')}:${r.rows.map(shape).join('|')}`
   async function settledReading(tries = 5) {
@@ -483,11 +509,16 @@ export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses
     : 0
   const ordinalsWhole = seenOrdinals.length === 0 || (seenOrdinals[0] === 1 && ordinalGaps === 0)
   if (!ordinalsWhole) {
+    // Say which of the two things is actually wrong. A thread can start at
+    // turn 1 and still have a hole in the middle, and reporting that as
+    // "does not start at turn 1" sends the next reader looking in the wrong
+    // place.
+    const faults = []
+    if (seenOrdinals[0] !== 1) faults.push(`it starts at turn ${seenOrdinals[0]}, not 1`)
+    if (ordinalGaps) faults.push(`${ordinalGaps} turn(s) are missing from the middle`)
     log?.warn(
-      `thread sweep: the provider numbers its turns from ${seenOrdinals[0]}` +
-        `${ordinalGaps ? ` with ${ordinalGaps} missing in between` : ''} - ` +
-        `${messages.length} message(s) were walked, but the thread does not start at turn 1, ` +
-        'so this export is reported as incomplete'
+      `thread export is INCOMPLETE: ${messages.length} message(s) were walked but ` +
+        `${faults.join(', and ')} - reported as incomplete rather than as the whole thread`
     )
   }
 

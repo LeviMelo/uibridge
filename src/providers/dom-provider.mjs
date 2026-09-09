@@ -511,10 +511,10 @@ export class DomProvider extends Provider {
         continue
       }
       const controls = host.locator(g.control)
-      const count = await controls.count().catch(() => 0)
+      const controlCount = await controls.count().catch(() => 0)
       for (let i = 0; i < message.file_controls.length; i++) {
         const fallbackName = message.file_controls[i] || `download-${i + 1}.bin`
-        if (i >= count) {
+        if (i >= controlCount) {
           files.push({ name: fallbackName, message_id: message.id, error: 'the download control is no longer rendered on this message' })
           continue
         }
@@ -1047,7 +1047,6 @@ export class DomProvider extends Provider {
   async awaitCompletion(page, ctx) {
     const s = this.sel
     const cfg = this.settings
-    const before = ctx.turnsBefore ?? 0
 
     if (ctx.wire && (await this.#awaitWire(ctx))) return ctx
 

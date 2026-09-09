@@ -98,6 +98,14 @@ OpenAI SDK cannot call it, that is a bug).
 **If you are an AI agent working on this repository, read `AGENTS.md` before
 changing anything.**
 
+## Where the rest is written down
+
+| | |
+|---|---|
+| [`docs/UI-RECON.md`](docs/UI-RECON.md) | **The UI, as measured.** A by-hand survey of the two interfaces this drives - composers and their decoys, the timing of a turn, thread identity, attachments, generated files. Read it before changing a selector. |
+| [`AGENTS.md`](AGENTS.md) | The rules for changing this project, and the mistakes that made each rule necessary. |
+| [`docs/`](docs/) | Dated records of what was measured, and when. |
+
 ## Install it once, call it from anything
 
 ```bash
@@ -536,6 +544,38 @@ The complete set, from a real response:
 | `provider_error` | Retained in Session/CLI results; the HTTP API rejects recognised provider error notices with 502. Detection depends on observed provider wording and cannot recognise every possible non-answer. |
 | `usage` | Always zero. Token counts are not observable through a UI, and inventing them would be worse than admitting it. |
 
+### Answer integrity
+
+These sites render their OWN failures as an ordinary assistant message.
+"Sorry, something went wrong. Please try your request again." arrives as a
+normal turn: 59 characters, markdown, indistinguishable in structure from a
+real reply. Extraction returns it happily, and in a batch that silently poisons
+rows — an apology recorded as evidence.
+
+There is no structural marker to key on; measured, an errored turn is an
+ordinary response element with an ordinary paragraph. Text is the only signal
+the UI gives, so uibridge matches measured wordings and reports the verdict
+rather than hiding it:
+
+- `provider_error` — the answer matched a **measured** failure wording. The
+  request becomes a typed, retryable error instead of a 200.
+- `provider_error_suspected` — it opens like a failure (an apology, a refusal
+  to continue) but matches nothing known. This is a **flag, not a verdict**:
+  the text still comes back, because a terse refusal can be legitimate content.
+- `provider_error_match` — which pattern produced a positive verdict, so a
+  false positive can be traced to the rule that caused it.
+
+Three settings control it, all under `provider` in `config.json`:
+
+| setting | default | what it does |
+|---|---|---|
+| `errorTextExtra` | `[]` | Extra failure wordings, as regex source strings. A provider can change its error text at any time and you will meet the new one before this project does; adding it here needs no code change. |
+| `failOnSuspectedProviderError` | `false` | Promote a *suspected* failure to a 502 instead of a flag. Off by default; turn it on for pipelines that would rather lose a row than record a bad one. |
+| `errorNoticeMaxChars` | `400` | Longer text that merely *contains* an apology is an answer, not a failure notice. |
+
+Anything not on the list is reported as suspected rather than guessed at. The
+mechanism lives in `src/core/answer-integrity.mjs`.
+
 ### Exporting a whole thread
 
 `uibridge export <provider> <native-id>` (or `POST /v1/threads/export` with
@@ -601,7 +641,9 @@ retryable.
 |---|---|---|
 | 400 | `invalid_request` | Your request: unknown model, missing file, empty messages, a config key this build does not have. |
 | 401 | `signed_out` | Run `uibridge login <provider>`. Carries the evidence that led to the verdict. |
+| 403 | `cross_origin_refused` | The request carried an `Origin` header from something other than this machine, so it came from a web page rather than a program. uibridge does not serve web pages. |
 | 404 | `thread_unknown` | No local ledger for that thread on this machine. |
+| 404 | `not_found` | No such route. |
 | 404 | `model_not_found` | `GET /v1/models/{id}` for a model this build does not serve. |
 | 404 | `request_not_found` | No durable record for that Idempotency-Key. |
 | 409 | `idempotency_conflict` | That key was used for a *different* request. |
@@ -616,7 +658,9 @@ retryable.
 | 502 | `submit_failed`, `submit_uncertain`, `compose_failed` | The prompt did not go out, or it is not certain that it did. |
 | 502 | `thread_mismatch`, `thread_unidentified` | The page is not on the thread we asked for, or will not say which thread it is on. |
 | 502 | `upload_failed` | The site refused an attachment. |
-| 502 | `download_identifier`, `download_artifact_missing`, `download_cancelled` | A generated file could not be retrieved. |
+| 502 | `upstream_refused` | The site answered the page's own conversation request with an HTTP error that carried no stream. Distinct from `rate_limited`, which is specifically a 429. |
+| 502 | `empty_response` | The turn completed and the provider produced no answer text at all. |
+| 502 | `download_identifier`, `download_artifact_missing`, `download_cancelled`, `download_save_failed`, `download_failed` | A generated file could not be retrieved. `download_save_failed` means the browser finished the download but the bytes could not be written to disk; `download_failed` is the fallback on a file record whose retrieval failed with no more specific cause. |
 | 502 | `non_monotonic_stream` | The stream contradicted itself; the text is not trustworthy. |
 | 503 | `challenge` | A verification challenge is up. uibridge never solves or evades one: clear it in the browser window. |
 | 503 | `network`, `network_blocked`, `browser_gone` | This machine could not reach the site, was blocked by a local proxy/certificate policy, or lost the browser. Only the first and last are `retryable`. |
@@ -627,7 +671,7 @@ retryable.
 | 504 | `composer_unavailable` | The prompt box never became usable. The message names the page and any notice that was covering it. |
 | 504 | `upload_not_registered` | The file never reached the page. Nothing was sent. |
 | 504 | `upload_slow` | The file is attached and the site is still uploading it. |
-| 500 | `chrome_missing`, `port_in_use`, `client_disconnected`, `not_implemented`, `bridge_error` | Local environment, or a bug in here. An unrecognised internal error stays a 500 on purpose rather than being dressed up as something familiar. |
+| 500 | `internal`, `chrome_missing`, `port_in_use`, `client_disconnected`, `not_implemented`, `bridge_error` | Local environment, or a bug in here. An unrecognised internal error stays a 500 on purpose rather than being dressed up as something familiar. |
 
 ## Architecture
 
@@ -770,8 +814,10 @@ every request, flagging which payload holds the answer.
 
 ## Status
 
-Live suite, run against Gemini with the system clipboard broken — so the
-`dom-markdown` tier was doing the work throughout:
+Live suite as it stood when this was recorded (the suite has changed shape
+since; `npm run certify` is the current one), run against Gemini with the
+system clipboard broken — so the `dom-markdown` tier was doing the work
+throughout:
 
 ```
 17/18   markdown extraction (28 pipes), maths correctly flagged lossy,
@@ -785,9 +831,15 @@ Live suite, run against Gemini with the system clipboard broken — so the
 ```
 
 The one failure was Gemini refusing a model switch (`gemini-pro` requested,
-UI stayed on Flash-Lite). That is Gemini's bug; the bridge reported it
-correctly rather than attributing the answer to Pro. It is now retried, and
-`strictModel` can turn it into an error.
+UI stayed on Flash-Lite). The bridge reported it correctly rather than
+attributing the answer to Pro. It is now retried, and `strictModel` can turn
+it into an error.
+
+That was read at the time as a Gemini-side bug. A later hand survey
+(`docs/UI-RECON.md`) measured a likelier cause: Gemini's menus mount into a
+body-level `cdk-overlay-container` and can take seconds to attach, so a
+picker queried too early looks like a picker that refused. The retry is the
+right fix either way, but the diagnosis has moved.
 
 ### What works today
 

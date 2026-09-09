@@ -425,6 +425,71 @@ test('models.retrieve() of a model we do not serve is a typed 404', async () => 
   assert.match(body.error.message, /Known:/, 'it says what it does serve')
 })
 
+// --- the daemon has to survive whatever is pointed at it ---------------------
+
+test('a malformed model id is a 404, not a dead daemon', async () => {
+  // `decodeURIComponent` throws URIError on a bad escape. That call used to
+  // sit in the ROUTER, outside the dispatcher's try, so `GET /v1/models/%zz`
+  // answered nothing and killed the process - one malformed URL from any
+  // local program and the daemon was gone mid-conversation.
+  const res = await fetch(`${server.base}/v1/models/%zz`)
+  assert.equal(res.status, 404)
+  const body = await res.json()
+  assert.equal(body.error.type, 'model_not_found')
+
+  // Still serving, which is the actual point of this test.
+  const after = await fetch(`${server.base}/health`)
+  assert.equal(after.status, 200)
+})
+
+test('every error response carries retryable and x-should-retry, including the ones nothing routes to', async () => {
+  // README promises both on EVERY error. The route-miss 404 and the
+  // unclassified 500 were the two that quietly did not, and the 500 is the
+  // load-bearing one: without the header both official SDKs retry it twice,
+  // and each retry is another real turn typed into the user's own thread.
+  const res = await fetch(`${server.base}/v1/nope`)
+  assert.equal(res.status, 404)
+  assert.equal(res.headers.get('x-should-retry'), 'false')
+  const body = await res.json()
+  assert.equal(body.error.type, 'not_found')
+  assert.equal(body.error.retryable, false)
+})
+
+test('a request carrying a foreign Origin is refused before it can spend anything', async () => {
+  // Binding to 127.0.0.1 does not keep out the browser the user already has
+  // open: POST /v1/chat/completions is a CORS-simple request, so any page
+  // could send one with no preflight. Measured before this check existed: a
+  // request with `origin: https://evil.example` ran a real turn, and one to
+  // /admin/shutdown stopped the daemon. The attacker cannot read the reply -
+  // the cost is the side effect.
+  const res = await post('/v1/chat/completions',
+    { model: MODEL, messages: [{ role: 'user', content: 'hello' }] },
+    { origin: 'https://evil.example' })
+  assert.equal(res.status, 403)
+  const body = await res.json()
+  assert.equal(body.error.type, 'cross_origin_refused')
+  assert.equal(res.headers.get('x-should-retry'), 'false')
+})
+
+test('a lookalike loopback origin does not get in', async () => {
+  const res = await post('/v1/chat/completions',
+    { model: MODEL, messages: [{ role: 'user', content: 'hello' }] },
+    { origin: 'http://127.0.0.1.evil.example' })
+  assert.equal(res.status, 403)
+})
+
+test('a genuinely local page is still served, and so is a caller that sends no Origin at all', async () => {
+  // curl, the CLI and both official SDKs send no Origin. A local tool served
+  // from another loopback port is as local as uibridge itself.
+  const local = await post('/v1/chat/completions',
+    { model: MODEL, messages: [{ role: 'user', content: 'hello' }] },
+    { origin: 'http://localhost:3000' })
+  assert.equal(local.status, 200)
+
+  const bare = await client.chat.completions.create({ model: MODEL, messages: [{ role: 'user', content: 'hello' }] })
+  assert.equal(bare.object, 'chat.completion')
+})
+
 // --- a stream that fails after it has already said something -----------------
 
 test('a mid-stream failure is reported in the stream, not papered over', async () => {

@@ -37,7 +37,6 @@ export function flattenMessages(messages) {
           : ''
     if (!content.trim()) continue
     if (m.role === 'user' && messages.length === 1) parts.push(content)
-    else if (m.role === 'system') parts.push(`[system]\n${content}`)
     else parts.push(`[${m.role}]\n${content}`)
   }
   if (!parts.length) throw new RequestError('no message content to send')

@@ -23,17 +23,16 @@ import { setLevel, logger } from '../src/core/log.mjs'
 import { BridgeError } from '../src/core/errors.mjs'
 import { attachBrowser } from '../src/core/chrome.mjs'
 import { waitFor } from '../src/core/async.mjs'
-import { ensureDaemon, daemonPost, rawHealth, flatten } from '../src/core/client.mjs'
+import { ensureDaemon, daemonPost, rawHealth, daemonHealth, flatten } from '../src/core/client.mjs'
 import { identify, isUibridge } from '../src/core/protocol.mjs'
 import { Session } from '../src/session.mjs'
 import { serve } from '../src/api/server.mjs'
-import { providerClass, providerIds } from '../src/providers/registry.mjs'
+import { providerClass, providerIds, modelCatalogue } from '../src/providers/registry.mjs'
 import { captureExchange } from '../src/tools/capture.mjs'
 import { reconObserve, reconExchange } from '../src/tools/recon.mjs'
 import { awaitSignIn } from '../src/core/signin.mjs'
 import { checkAnonymousDetection } from '../src/tools/anoncheck.mjs'
 import { signedOutMessage, sessionState } from '../src/core/auth.mjs'
-import { modelCatalogue } from '../src/providers/registry.mjs'
 import { listThreads, readThreadEvents } from '../src/core/ledger.mjs'
 
 const nlLiteral = String.fromCharCode(10)
@@ -68,6 +67,7 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
                                       in the chat: /new  /thread  /help  /exit
   uibridge stop                       stop the background uibridge (restart after code changes)
   uibridge paths [--json]             where config, profiles, downloads and logs live
+  uibridge --version                  print the version and exit
   uibridge autostart [--remove|--status]  run uibridge at logon (Windows task)
   uibridge export <provider> <id>      export a complete active thread branch
   uibridge export <provider> <id> --files  ...and download every file it generated
@@ -83,7 +83,22 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
 }
 
 /**
- * Reject flags this command does not have.
+ * Flags that carry a value, and therefore MUST be written `--flag=value`.
+ *
+ * Checking only the NAME left the original defect alive in its other half:
+ * `--model` is a known flag, so `ask echo --model echo-fast hello` passed
+ * validation, and the per-command parsers match only `--model=`, so both the
+ * flag and its value fell through to `words.push(a)`. Measured: that command
+ * exited 0 having sent the model the literal prompt
+ * "--model echo-fast hello", with `provenance.model: null`. The same shape
+ * made `export --output path.json` write to the default location and say
+ * nothing. A tool used to produce data must never quietly do something other
+ * than what the command line said.
+ */
+const VALUED_FLAGS = ['--file', '--model', '--thinking', '--thread', '--key', '--output']
+
+/**
+ * Reject flags this command does not have, and values written with a space.
  *
  * A tool used to produce data must never quietly do something other than
  * what the command line said. Measured here: `export ... --out file.json`
@@ -92,6 +107,14 @@ uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
  * the model. Both look like success.
  */
 function checkFlags(args, allowed, command) {
+  const naked = args.filter((a) => VALUED_FLAGS.includes(a) && allowed.includes(a))
+  if (naked.length) {
+    throw new BridgeError(
+      `${command}: ${naked.join(', ')} needs its value attached, as ${naked[0]}=VALUE. ` +
+        'Written with a space, the value would have been read as part of the prompt.',
+      { code: 'invalid_request', status: 400 }
+    )
+  }
   const bad = args
     .filter((a) => a.startsWith('--') && a !== '--')
     .map((a) => a.split('=')[0])
@@ -104,6 +127,21 @@ function checkFlags(args, allowed, command) {
       ` Accepted here: ${allowed.join(' ')}`,
     { code: 'invalid_request', status: 400 }
   )
+}
+
+/**
+ * `--thinking=on|off`, with ONE meaning across every command.
+ *
+ * `ask` rejected anything else; `chat` used `!== 'off'`, so `--thinking=yes`
+ * silently turned thinking ON and `--thinking=0` silently turned it on too.
+ * Two contracts for one flag is how a run ends up recorded under settings
+ * nobody chose.
+ */
+function parseThinking(value) {
+  if (!['on', 'off'].includes(value)) {
+    throw new BridgeError('--thinking must be on or off', { code: 'invalid_request', status: 400 })
+  }
+  return value === 'on'
 }
 
 function requireProviderArg(name) {
@@ -342,8 +380,7 @@ async function ask(id, args) {
     if (a.startsWith('--file=')) files.push(a.slice(7))
     else if (a.startsWith('--model=')) model = a.slice(8)
     else if (a.startsWith('--thinking=')) {
-      if (!['on', 'off'].includes(a.slice(11))) throw new BridgeError('--thinking must be on or off', { code: 'invalid_request', status: 400 })
-      modes.thinking = a.slice(11) === 'on'
+      modes.thinking = parseThinking(a.slice(11))
     }
     else if (a === '--json') json = true
     else if (a.startsWith('--thread=')) threadId = a.slice(9)
@@ -422,7 +459,7 @@ function chatOptions(args) {
   for (const a of args) {
     if (a.startsWith('--model=')) options.model = a.slice(8)
     else if (a.startsWith('--thread=')) options.threadId = a.slice(9)
-    else if (a.startsWith('--thinking=')) options.modes.thinking = a.slice(11) !== 'off'
+    else if (a.startsWith('--thinking=')) options.modes.thinking = parseThinking(a.slice(11))
     else if (a.startsWith('--file=')) options.files.push(a.slice(7))
   }
   return options
@@ -698,7 +735,16 @@ async function stopDaemon() {
  * real answer and is re-thrown - only "there is no daemon" falls back.
  */
 async function viaDaemon(path, body, pick) {
-  const live = await rawHealth(cfg).then((h) => identify(h) === 'ours').catch(() => false)
+  // ASK THE SAME QUESTION `ask` ASKS. This used to test only "is a uibridge
+  // listening", skipping the state-directory comparison that lives in
+  // daemonHealth - so with a daemon serving home A, `threads`/`thread` run
+  // under UIBRIDGE_HOME=B returned A's ledger rows and A's file paths, exit
+  // 0, while `ask` under B correctly refused. Reading another home's history
+  // and calling it yours is the quiet kind of wrong.
+  const live = await daemonHealth(cfg).catch((e) => {
+    if (e?.code === 'daemon_other_home') throw e
+    return null
+  })
   if (!live) return null
   return pick(await daemonPost(`http://${cfg.host}:${cfg.port}${path}`, body))
 }
@@ -828,6 +874,7 @@ async function requestCommand(args) {
   if (!['status', 'recover', 'cancel'].includes(action) || !key || !/^[\x21-\x7e]{1,200}$/.test(key)) {
     throw new BridgeError('Usage: uibridge request status|recover|cancel <key> [--json]', { code: 'invalid_request', status: 400 })
   }
+  checkFlags(args, ['--json'], 'request')
   setLevel('warn')
   const daemon = await ensureDaemon(cfg)
   const result = await daemonPost(`${daemon.base}/v1/requests/${action === 'recover' ? 'result' : action}`, {}, {
@@ -848,7 +895,13 @@ try {
     // is for watching it work, which is the only way some UI bugs are ever
     // found.
     const headed = rest.includes('--headed') || rest.includes('--no-headless')
-    await serve({ ...cfg, windowModeOverride: headed ? false : rest.includes('--headless') ? true : undefined })
+    // Fall back to the CONFIGURED value, not to undefined: writing undefined
+    // unconditionally made UIBRIDGE_HEADED (and any windowModeOverride in
+    // config) inert for the daemon, which is the one process that matters.
+    await serve({
+      ...cfg,
+      windowModeOverride: headed ? false : rest.includes('--headless') ? true : cfg.windowModeOverride,
+    })
   }
   else if (cmd === 'login') await login(requireProviderArg(rest[0]))
   else if (cmd === 'logout') await logout(requireProviderArg(rest[0]))
@@ -864,7 +917,12 @@ try {
     // which model ids exist - and the daemon's answer is the one a caller's
     // request is actually judged against. Only when nothing is listening does
     // the local catalogue speak for the API.
-    const live = await rawHealth(cfg).then((h) => (identify(h) === 'ours' ? h : null)).catch(() => null)
+    // Same state-directory rule as viaDaemon: a daemon serving another home
+    // must not answer for this one's catalogue.
+    const live = await daemonHealth(cfg).catch((e) => {
+      if (e?.code === 'daemon_other_home') throw e
+      return null
+    })
     const ids = live
       ? (await daemonPost(`http://${cfg.host}:${cfg.port}/v1/models`, null, { method: 'GET' })).data.map((m) => m.id)
       : modelCatalogue().map((m) => m.id)

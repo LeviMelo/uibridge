@@ -23,6 +23,12 @@ matched` — then kept capturing as though a turn had been sent. **A script can
 only find what its author already assumed.** That is the same failure one level
 up, so the survey below was done by looking.
 
+That script is `tools/recon-ui.mjs`. It is kept, because its header is the
+lesson and because nothing else produces the bulk `network.jsonl` /
+`skeleton.html` / inventory dumps under `testdata/recon/ui-<provider>/`. Use
+it to capture in bulk once you already know what you are looking at. Never
+use it to find out.
+
 ## How to redo this
 
 Open the site in a signed-in browser and read the DOM directly. Two harness

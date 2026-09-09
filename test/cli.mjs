@@ -95,6 +95,48 @@ test('unknown flags are refused rather than silently ignored', async () => {
   assert.match(a.out, /unknown option --temperature/)
 })
 
+test('a value flag written with a space is refused, not swept into the prompt', async () => {
+  // The other half of the same defect, and the more dangerous half: --model
+  // is a KNOWN flag, so name-only validation passed it, and the parsers match
+  // only `--model=`. Measured: `ask echo --model echo-fast hello` exited 0
+  // having sent the model the literal prompt "--model echo-fast hello" with
+  // provenance.model null. It looked exactly like success.
+  const m = await cli(['ask', 'echo', '--model', 'echo-fast', 'hello'])
+  assert.equal(m.code, 1, 'it must not answer')
+  assert.match(m.out, /--model needs its value attached/)
+
+  // Same shape silently wrote exports to the default location.
+  const o = await cli(['export', 'echo', 'abc', '--output', 'wanted.json'])
+  assert.equal(o.code, 1)
+  assert.match(o.out, /--output needs its value attached/)
+
+  // The `=` form still works, and boolean flags are untouched.
+  const ok = await cli(['ask', 'echo', 'hello', '--model=echo-fast', '--json'])
+  assert.equal(ok.code, 0)
+  const doc = json(ok.stdout)
+  assert.equal(doc.provenance.model.requested, 'echo-fast', 'the = form still reaches the provider')
+  assert.equal(doc.text, 'hello', 'and the flag is not part of the prompt')
+})
+
+test('--thinking means the same thing in every command that takes it', async () => {
+  // `ask` validated the value; `chat` used `!== 'off'`, so --thinking=yes
+  // silently turned thinking ON. Two contracts for one flag is how a run ends
+  // up recorded under settings nobody chose.
+  const a = await cli(['ask', 'echo', 'hi', '--thinking=yes'])
+  assert.equal(a.code, 1)
+  assert.match(a.out, /--thinking must be on or off/)
+
+  const c = await cli(['chat', 'echo', '--thinking=yes', '--jsonl'])
+  assert.equal(c.code, 1, 'chat must refuse exactly what ask refuses')
+  assert.match(c.out, /--thinking must be on or off/)
+})
+
+test('request validates its flags like every other command', async () => {
+  const r = await cli(['request', 'status', 'some-key', '--jsn'])
+  assert.equal(r.code, 1)
+  assert.match(r.out, /unknown option --jsn/)
+})
+
 test('paths reports where state lives, as text and as JSON', async () => {
   const text = await cli(['paths'])
   assert.equal(text.code, 0)
@@ -334,6 +376,16 @@ test('a daemon serving a different state directory is refused, not used', async 
     assert.equal(r.code, 1)
     assert.match(r.out, /different state directory/)
     assert.match(r.out, /uibridge stop/, 'and says what to do about it')
+
+    // The LEDGER commands used to skip this check entirely: they asked only
+    // "is a uibridge listening", so they answered from the other home's
+    // ledger, printed its file paths, and exited 0. Reading someone else's
+    // history and presenting it as yours is the quiet kind of wrong.
+    for (const argv of [['threads', '--json'], ['thread', 'echo', 'whatever'], ['models']]) {
+      const l = await cli(argv)
+      assert.equal(l.code, 1, `${argv[0]} must refuse a daemon serving another home`)
+      assert.match(l.out, /different state directory/, `${argv[0]} must say why`)
+    }
   } finally {
     // WAIT FOR THE PORT, not just for kill() to return. The signal is
     // asynchronous, and a later test that starts its own daemon would

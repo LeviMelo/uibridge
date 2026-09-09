@@ -32,9 +32,13 @@ export class Capabilities {
     attachments = false,
     generatedFiles = false,
     citations = false,
+    // Declared by both real providers and by echo, and silently dropped
+    // here until 2026-09-09 - so /v1/capabilities said nothing about
+    // thread export while dom-provider's comment claimed it was honest.
+    threadExport = false,
     transports = ['dom'],
   } = {}) {
-    Object.assign(this, { models, modes, attachments, generatedFiles, citations, transports })
+    Object.assign(this, { models, modes, attachments, generatedFiles, citations, threadExport, transports })
   }
 }
 
@@ -115,7 +119,7 @@ export class Provider {
 
   /**
    * Select a model. MUST return provenance:
-   *   { requested, applied, verified, label }
+   *   { requested, applied, verified, note }
    * "Requested" is not "applied": a picker can silently ignore a click, and a
    * research pipeline needs to record which model actually answered.
    */

@@ -34,5 +34,4 @@ testdata/recon/
 # Ad-hoc export/run outputs from live acceptance runs.
 cexp*.json
 gexp*.json
-testdata/cexp4.json
 .msg.tmp

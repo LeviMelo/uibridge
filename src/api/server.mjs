@@ -30,6 +30,15 @@ import {
 
 const log = logger('api')
 
+/**
+ * The only origins allowed to reach this API from a browser: this machine.
+ *
+ * Anchored at both ends, so `http://127.0.0.1.evil.com` does not pass. The
+ * port is optional and unconstrained - a page served from any local port is
+ * as local as one on uibridge's own.
+ */
+const LOOPBACK_ORIGIN = /^https?:\/\/(?:127\.0\.0\.1|\[::1\]|localhost)(?::\d+)?$/i
+
 function send(res, status, body, headers = {}) {
   if (res.destroyed || res.writableEnded) return
   const payload = JSON.stringify(body, null, 2)
@@ -270,9 +279,10 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
       threads: await listThreads(resolve(home, cfg.ledgerDir), body?.provider ? requireProvider(cfg, providerIds, body.provider) : null),
     }),
 
-    'GET /v1/threads': async () => ({
-      threads: await listThreads(resolve(home, cfg.ledgerDir), null),
-    }),
+    // The same query as POST /v1/threads/list, kept as a convenience read
+    // for curl and delegated rather than written twice - the two had
+    // already started to differ, since only the POST honours `provider`.
+    'GET /v1/threads': (_body, ctx) => routes['POST /v1/threads/list']({}, ctx),
 
     'POST /v1/chat/completions': async (body, { signal, key }) => {
       const parsed = parseCompletionRequest(body, cfg)
@@ -370,8 +380,21 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
    */
   function modelRoute(method, path) {
     if (method !== 'GET' || !path.startsWith('/v1/models/')) return null
-    const id = decodeURIComponent(path.slice('/v1/models/'.length))
+    const raw = path.slice('/v1/models/'.length)
     return async () => {
+      // DECODE INSIDE THE HANDLER, NOT WHILE ROUTING. `decodeURIComponent`
+      // throws URIError on a malformed escape, and routing happens OUTSIDE
+      // the dispatcher's try - so `GET /v1/models/%zz` used to reach the top
+      // of the process, answer nothing, and kill the daemon. Measured: the
+      // request hung and the process exited 1. In here the throw is awaited
+      // inside the try and becomes the honest 404 below.
+      let id
+      try {
+        id = decodeURIComponent(raw)
+      } catch {
+        throw new BridgeError(`No model "${raw}": the id is not valid percent-encoding.`,
+          { status: 404, code: 'model_not_found' })
+      }
       const found = modelResponse(modelCatalogue(), id)
       if (!found) {
         throw new BridgeError(`No model "${id}". Known: ${modelCatalogue().map((m) => m.id).join(', ')}`,
@@ -387,8 +410,41 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
     res.once('close', disconnected)
     req.once('aborted', disconnected)
     const path = (req.url ?? '/').split('?')[0].replace(/\/+$/, '') || '/'
+
+    // A WEB PAGE IS NOT A CLIENT OF THIS API.
+    //
+    // Binding to 127.0.0.1 keeps other machines out; it does NOT keep out the
+    // browser the user already has open. `POST /v1/chat/completions` and
+    // `POST /admin/shutdown` are both CORS-"simple" requests, so any page the
+    // user visits could send them with no preflight. Measured 2026-09-09: a
+    // request carrying `origin: https://evil.example` ran a real turn on the
+    // user's own signed-in thread, and another stopped the daemon. The
+    // attacker cannot READ either response - no access-control-allow-origin
+    // is ever sent - but the damage is the side effect, not the reply: a
+    // message in the user's history and a turn off the subscription this
+    // project exists to conserve.
+    //
+    // Only browsers attach Origin. curl, the CLI and both official OpenAI
+    // SDKs send none, so this costs a real caller nothing.
+    const origin = req.headers.origin
+    if (origin && !LOOPBACK_ORIGIN.test(origin)) {
+      log.warn(`refused a cross-origin request from ${String(origin).slice(0, 120)}`)
+      return send(res, 403, {
+        error: {
+          message: 'uibridge does not serve web pages. This request carried an Origin header, ' +
+            'which means it came from a site in your browser rather than from a program on this machine.',
+          type: 'cross_origin_refused',
+          retryable: false,
+        },
+      }, { 'x-should-retry': 'false' })
+    }
+
     const route = routes[`${req.method} ${path}`] ?? modelRoute(req.method, path)
-    if (!route) return send(res, 404, { error: { message: `No route ${req.method} ${path}`, type: 'not_found' } })
+    if (!route) {
+      return send(res, 404, {
+        error: { message: `No route ${req.method} ${path}`, type: 'not_found', retryable: false },
+      }, { 'x-should-retry': 'false' })
+    }
 
     try {
       const context = { signal: controller.signal, key: readKey(req) }
@@ -419,7 +475,10 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
       }
       const message = String(err.message ?? err).split('\n')[0].slice(0, 500)
       log.error(message)
-      send(res, 500, { error: { message, type: 'internal' } })
+      // `retryable: false` and the header are not decoration: an unclassified
+      // 5xx without them is retried by both official SDKs, and each retry is
+      // a real turn on the site. The README promises every error carries both.
+      send(res, 500, { error: { message, type: 'internal', retryable: false } }, { 'x-should-retry': 'false' })
     } finally {
       res.removeListener('close', disconnected)
       req.removeListener('aborted', disconnected)
@@ -448,7 +507,11 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
 export async function serve(cfg = loadConfig()) {
   const app = createApp(cfg)
   await new Promise((resolve, reject) => {
-    app.server.once('error', (e) => {
+    // Named so it can be REMOVED once listening starts. As a bare `once`,
+    // this handler was consumed by the first error and then nothing was
+    // listening at all: every later server error - a socket fault mid-run -
+    // hit an EventEmitter with no 'error' listener, which throws.
+    const onStartupError = (e) => {
       if (e.code === 'EADDRINUSE') {
         reject(
           new BridgeError(
@@ -459,8 +522,13 @@ export async function serve(cfg = loadConfig()) {
           )
         )
       } else reject(e)
+    }
+    app.server.once('error', onStartupError)
+    app.server.listen(cfg.port, cfg.host, () => {
+      app.server.off('error', onStartupError)
+      app.server.on('error', (e) => log.error(`server error: ${e.message}`))
+      resolve()
     })
-    app.server.listen(cfg.port, cfg.host, resolve)
   })
 
   console.log(`

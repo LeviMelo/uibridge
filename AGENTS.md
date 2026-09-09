@@ -100,6 +100,18 @@ and **named back** in `_uibridge.unsupported_parameters` — never silently
 swallowed. Parameters whose silent absence would corrupt a caller's logic
 (`tools`, `n > 1`) are refused with a 400.
 
+## Where things are written down
+
+- `README.md` - for people using uibridge.
+- `AGENTS.md` (this file) - the rules for changing it.
+- `docs/UI-RECON.md` - **the two UIs as actually measured.** The first thing
+  to read before touching a selectors file, and the thing to re-measure
+  rather than trust if it looks stale.
+- `docs/` - dated records: the original handover, and findings from live
+  runs. When one turns out to be wrong, date the correction and leave the
+  original claim visible. Quietly overwriting it destroys the only evidence
+  that the question was ever settled.
+
 ## How to test this project
 
 There are exactly two kinds of test here, and both are about transport.
@@ -148,8 +160,12 @@ OK") **precisely so the answer's content is never the thing under test.**
   up. Open the page yourself.
 - Every error code must appear in the Errors table in `README.md`; a test
   enforces this.
-- `.profiles/`, `testdata/`, `downloads/` and the local ledger stay
-  gitignored.
+- `.profiles/`, `downloads/`, `.uibridge/` and the `dom/`, `net/`,
+  `downloads/`, `capture/` and `recon/` subfolders of `testdata/` are
+  gitignored. **`testdata/` itself is NOT** - its root holds tracked
+  fixtures. A DOM or recon dump therefore goes in a subfolder, never in
+  the root, or it lands in a commit carrying conversation content and
+  session tokens. Root-level scratch (`_anything`) is ignored too.
 
 ## Before you claim something works
 
