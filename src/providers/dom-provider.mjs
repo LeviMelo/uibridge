@@ -23,6 +23,7 @@ import { parseCodeBlocks, parseTables } from '../core/markdown.mjs'
 import {
   copyMarkdown,
   count,
+  downloadFromPreview,
   downloadGeneratedFiles,
   isGenerating,
   readRenderedText,
@@ -537,6 +538,27 @@ export class DomProvider extends Provider {
           files.push({ ...file, message_id: message.id })
           onFile?.(file)
         } catch (e) {
+          // A RELOADED THREAD IS A DIFFERENT MECHANISM, not a flakier one.
+          // The message's own link stops fetching once the page has been
+          // reloaded - it only opens the preview panel - so the wire capture
+          // above is structurally unable to succeed there, however many times
+          // it clicks. The panel's own control still downloads the file, as a
+          // browser download rather than an in-page fetch. Measured
+          // 2026-09-09; see `_previewDownload` in the ChatGPT selectors.
+          const viaPreview = await downloadFromPreview(page, g, {
+            control: controls.nth(i),
+            dir: this.settings.downloadDir,
+            downloadMs: this.settings.fileWaitMs,
+            log: this.log,
+          }).catch((err) => {
+            this.log?.debug(`the preview panel did not yield the file either: ${err.message.split('\n')[0]}`)
+            return null
+          })
+          if (viaPreview) {
+            files.push({ ...viaPreview, message_id: message.id })
+            onFile?.(viaPreview)
+            continue
+          }
           this.log?.warn(
             `${fallbackName}: could not retrieve the file - ${e.message.split('\n')[0]}` +
               `; the page's recent requests were: ${tap.seen().slice(-8).join(', ')}`

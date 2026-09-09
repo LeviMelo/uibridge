@@ -178,6 +178,57 @@ export async function copyMarkdown(page, { copyButton }, { expectLen = 0, render
 }
 
 /**
+ * Retrieve a generated file through the preview panel the file link opens.
+ *
+ * The path for a file the browser is looking at AFTER a reload, where the
+ * message's own download link no longer fetches anything - it only opens the
+ * preview panel, and the panel's toolbar holds the control that downloads.
+ * Both halves are measured; see `_previewDownload` in the ChatGPT selectors.
+ *
+ * The bytes arrive as a REAL browser download here, not as an in-page fetch,
+ * so this deliberately uses Chrome's download event rather than the wire tap:
+ * CDP has no response body to give for a download and answers ERR_ABORTED.
+ *
+ * Returns a file entry, or null when the provider has no measured panel -
+ * null means "not my path", so the caller can report its own failure rather
+ * than have this one guess.
+ */
+export async function downloadFromPreview(page, spec, { control, dir = 'downloads', openMs = 8000, downloadMs = 30000, log } = {}) {
+  if (!spec?.previewPanel || !spec?.previewDownload) return null
+  const panel = page.locator(spec.previewPanel).first()
+  const open = () => panel.isVisible().catch(() => false)
+
+  if (!(await open())) {
+    if (!control) return null
+    await control.click({ timeout: 5000 }).catch(() => {})
+    await waitFor(open, { timeout: openMs, poll: 150, what: 'the file preview panel' }).catch(() => null)
+    if (!(await open())) return null
+  }
+
+  // A bare icon button whose only stable identity is its label, so a miss
+  // here is reported as a miss instead of being papered over with a guess at
+  // its position in the toolbar - its neighbour is fullscreen, not download.
+  const button = panel.getByLabel(new RegExp(spec.previewDownload, 'i')).first()
+  try {
+    if (!(await button.count().catch(() => 0))) {
+      log?.warn(`the preview panel has no control labelled /${spec.previewDownload}/i`)
+      return null
+    }
+    mkdirSync(dir, { recursive: true })
+    const { name, path } = await captureDownload(page, () => button.click({ timeout: 8000 }), { dir, timeout: downloadMs })
+    const bytes = statSync(path).size
+    log?.debug(`saved generated file ${name} (${bytes} bytes) from the preview panel`)
+    return { name, path, bytes, mime: null, source: 'browser' }
+  } finally {
+    // Leave the thread as it was found: the panel covers the messages behind
+    // it, including the next file link this export is about to click.
+    if (spec.previewClose) {
+      await panel.locator(spec.previewClose).first().click({ timeout: 4000 }).catch(() => {})
+    }
+  }
+}
+
+/**
  * Download files the provider GENERATED, returning bytes on disk.
  *
  * `spec` names the contract:

@@ -110,8 +110,11 @@ say('uibridge certification by use')
 say(`  base   : ${BASE}`)
 say(`  root   : ${ROOT}`)
 
-const health = await http('/health')
-if (health.status !== 200) {
+// The friendly message below was unreachable: with nothing listening,
+// fetch REJECTS rather than returning a status, so this exited on an
+// undici stack trace instead of saying which command to run.
+const health = await http('/health').catch(() => null)
+if (!health || health.status !== 200) {
   say(`${NL}No uibridge on ${BASE}. Start one with: uibridge serve`)
   process.exit(2)
 }

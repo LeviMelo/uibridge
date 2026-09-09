@@ -282,9 +282,12 @@ shows `recon_out.csv` with a `library-file-icon` testid.
 
 ---
 
-# Open, and measured as far as it goes
+# Closed by measurement
 
 ## ChatGPT: retrospective download of a file already fetched once
+
+**Opened 2026-09-09, closed the same day. The original claim is left standing
+below the answer, because it was the evidence that framed the question.**
 
 `export --files` retrieves a thread's generated files by clicking the message's
 own `button.behavior-btn` and waiting for the content request
@@ -292,32 +295,84 @@ own `button.behavior-btn` and waiting for the content request
 
 | Case | Result |
 |---|---|
-| Live turn, at the moment the answer arrives | `diag_probe.csv`, 24 bytes, `source: wire` — **works** |
+| Live turn, at the moment the answer arrives | `diag_probe.csv`, 24 bytes, `source: wire` - **works** |
 | Retrospective on that same thread, immediately | 3 clicks, **no request**, no file |
-| Retrospective on that same thread, +75s | identical — so it is not "too soon" |
+| Retrospective on that same thread, +75s | identical - so it is not "too soon" |
 | Retrospective on an older thread whose file had never been downloaded in that browser session | **works**, `source: wire` |
 
-The clicks produce **neither a network request nor a browser download** — the
+The clicks produce **neither a network request nor a browser download** - the
 `downloads/` directory gained no second copy. So the click is not silently
 succeeding somewhere the wire tap cannot see; nothing happens at all.
 
-**Hypothesis, NOT yet measured:** `behavior-btn` opens the file preview surface
-rather than downloading directly (the contract already names a `previewPanel`:
-`[data-testid="artifact-preview-surface-shell"]`, `[data-testid="stage-thread-flyout"]`),
-and the fetch the tap normally catches is the *preview* loading its content —
-which does not happen when the browser already holds those bytes from an
-earlier download in the same session. That would explain every row above.
+### What the page actually does
 
-**Do not fix this by guessing.** The next step is to open such a thread, click
-that control by hand, and record what the panel actually renders and which
-control inside it performs the download — the same method that produced the
-rest of this document. Until then uibridge reports the honest error
-("N clicks on the download link produced no request - the page never asked for
-the file") and `export --files` returns the entry with that error rather than a
-file that is not there.
+Three instrumented runs, `Network.requestWillBeSent` and
+`Browser.downloadWillBegin` both armed, DOM sampled before and after each
+click. The hypothesis above was right about the panel and **wrong about the
+cause** - the bytes are not missing because the browser already has them.
 
-Note this affects retrospective retrieval only. Files still arrive correctly at
-the moment the answer is generated, which is the path a normal caller uses.
+**The two paths are different mechanisms, not one flaky mechanism.**
+
+| | At generation time | On a reloaded thread |
+|---|---|---|
+| Click on `button.behavior-btn` | page fetches `interpreter/download` then `estuary/content` | **no request at all** |
+| Preview panel | opens | opens |
+| Where the bytes are | the response body, read by the wire tap | nowhere yet |
+| Chrome writes a file | no | - |
+
+On the reloaded thread the click *only* opens the panel. Re-clicking - which is
+what the old code did, three times - can only toggle that panel shut and open
+again, which is exactly why it reported "the page never asked for the file".
+
+The control that fetches is **inside the panel**:
+
+```
+[data-testid="artifact-preview-surface-shell"]
+  button[data-testid="popcorn-zoom-select"]     100%
+  button[aria-label="Baixar"]                   <- this one
+  button[aria-label="Tela cheia"]               fullscreen
+  button[data-testid="close-button"]            Fechar
+```
+
+Clicking it issues
+`GET /backend-api/estuary/content?id=file_…&fn=…&cd=attachment` and, because of
+that `cd=attachment`, **a real browser download** (`diag_probe(1).csv`).
+
+### Why this path does not use the wire tap
+
+Measured on that same click: the tap **sees the request** and then fails to read
+the body with **`net::ERR_ABORTED`**. A download is not an in-page fetch, and
+CDP has no response body to hand back for one. Chrome's own download event is
+the only place those bytes exist. So the retrospective path captures the browser
+download and reports `source: "browser"`; the live path is untouched and still
+reports `source: "wire"`.
+
+### Why the control is matched by label
+
+That button has no stable structural identity: no `data-testid`, and an icon of
+`<use href="…/sprites-core-<hash>.svg#be92c3">` whose hash changes with every
+asset deploy. Its neighbour (fullscreen) carries an **identical class list**, so
+"the first icon button in the toolbar" would click the wrong one. It is
+therefore matched on `aria-label` against the same kind of locale alternation
+`notices` already uses. Only the pt-BR spelling (`Baixar`) was measured on this
+account; the other spellings are unmeasured, and a miss is reported as a miss
+rather than guessed past - `downloadFromPreview` returns null and the caller
+reports its own error.
+
+**Verified end to end 2026-09-09**, on the thread that had failed twice:
+
+```
+uibridge export chatgpt 6aa1deb0-… --files --json
+  complete: true | messages: 2
+  FILE: {"name":"diag_probe(1).csv","bytes":24,"mime":null,"source":"browser", …}
+  $ cat downloads/diag_probe\(1\).csv
+  id,value
+  1,alpha
+  2,beta
+```
+
+`mime` is null on this path and that is honest: the metadata response that names
+the type on the live path is never fetched here.
 
 # What this survey changed
 
@@ -327,6 +382,7 @@ the moment the answer is generated, which is the path a normal caller uses.
 | Gemini menus mount in `cdk-overlay-container` and attach late; the likely cause of intermittent `modelPicker` failures | **Documented** — timing, not selectors |
 | `message-actions` gained `Redo` | Note in `gemini/selectors.json` is stale by one entry; selector unaffected |
 | Gemini model labels now version-prefixed (`3.1 Pro`) | Existing regexes verified live, still correct |
+| `export --files` could not retrieve a file from a reloaded thread | **Fixed** — the message link only opens the preview panel there; the panel's own control downloads, and the bytes arrive as a browser download, not on the wire |
 
 Confirmed correct by independent measurement, having been taken on trust
 before: Gemini has no file input (`cdp-drag`); the `You said` duplication and

@@ -1647,3 +1647,51 @@ test('a shorter later reading never truncates the text it already had', async ()
   assert.equal(kept.text, 'the complete answer', 'the fuller text must win')
   assert.deepEqual(kept.file_controls, ['Download x.csv'], 'and the new control must still be picked up')
 })
+
+
+import { downloadFromPreview } from '../src/transports/dom.mjs'
+
+// A stand-in for the one shape downloadFromPreview reads: a panel locator that
+// reports visibility and answers getByLabel. `context()` stands in for the
+// browser-download capture, so reaching it IS the assertion that the control
+// was found - capturing real bytes needs a browser and belongs in the live
+// suite.
+function previewPage({ visible = true, labelled = [] } = {}) {
+  const miss = { count: async () => 0, click: async () => {} }
+  const hit = { count: async () => 1, click: async () => {} }
+  const panel = {
+    isVisible: async () => visible,
+    getByLabel: (re) => ({ first: () => (labelled.some((l) => re.test(l)) ? hit : miss) }),
+    locator: () => ({ first: () => ({ click: async () => {} }) }),
+  }
+  return {
+    locator: () => ({ first: () => panel }),
+    context: () => { throw new Error('reached the browser download capture') },
+  }
+}
+
+test('a provider with no measured preview control declines instead of guessing', async () => {
+  const page = { locator: () => { throw new Error('must not touch the page without a measured selector') } }
+  assert.equal(await downloadFromPreview(page, { previewPanel: '#p' }, { dir: 'x' }), null,
+    'no previewDownload means this path does not apply - not that it should improvise one')
+  assert.equal(await downloadFromPreview(page, { previewDownload: 'Download' }, { dir: 'x' }), null)
+})
+
+test('an open preview panel with no matching download control reports a miss, not a wrong click', async () => {
+  // The neighbouring button is fullscreen and carries the identical classes,
+  // so falling back to "the first icon button" would silently click that.
+  const page = previewPage({ visible: true, labelled: ['Tela cheia', 'Fechar'] })
+  assert.equal(await downloadFromPreview(page, { previewPanel: '#p', previewDownload: 'Baixar|Download' }, { dir: 'x' }), null)
+})
+
+test('the preview path finds its control by label in any of the measured spellings', async () => {
+  for (const label of ['Baixar', 'Download', 'Descargar']) {
+    const page = previewPage({ visible: true, labelled: [label] })
+    // Reaching the capture proves the control was FOUND and clicked.
+    await assert.rejects(
+      downloadFromPreview(page, { previewPanel: '#p', previewDownload: 'Baixar|Download|Descargar' }, { dir: 'x' }),
+      /reached the browser download capture/,
+      `the ${label} spelling must resolve to the panel's download control`
+    )
+  }
+})

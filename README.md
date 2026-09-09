@@ -590,6 +590,17 @@ naming the file, its local `path`, `bytes` and `mime`, or an `error` if that
 one could not be fetched. A provider with no measured download control says so
 once in `files_skipped` rather than pretending the thread had none.
 
+`source` says where the bytes came from, because retrieving a file from a
+thread the browser has merely reloaded is not the same mechanism as receiving
+one as it is generated. `wire` means the page fetched the file and uibridge
+read the response, which is what happens at generation time and carries the
+server's own name and MIME type. `browser` means the message's link no longer
+fetches anything and only opens the file preview panel, so the download was
+taken from that panel and arrived as an ordinary browser download - the bytes
+are byte-exact either way, but `mime` is null, since the metadata response
+that names the type is never fetched on that path. Both are measured; see
+`docs/UI-RECON.md`.
+
 These chat UIs virtualize their history: on a 34-message thread only six
 messages exist in the document at any moment, so an export is a walk, and
 `evidence` says how well that walk went rather than asking you to trust it:
