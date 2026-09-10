@@ -102,6 +102,7 @@ changing anything.**
 
 | | |
 |---|---|
+| [`docs/PYTHON.md`](docs/PYTHON.md) | **Using it from Python** - from a fresh machine to a working script, every option, and what each error means. Start here if you are calling uibridge from code. |
 | [`docs/UI-RECON.md`](docs/UI-RECON.md) | **The UI, as measured.** A by-hand survey of the two interfaces this drives - composers and their decoys, the timing of a turn, thread identity, attachments, generated files. Read it before changing a selector. |
 | [`AGENTS.md`](AGENTS.md) | The rules for changing this project, and the mistakes that made each rule necessary. |
 | [`docs/`](docs/) | Dated records of what was measured, and when. |
@@ -146,6 +147,18 @@ the `ExecStart` line for a systemd user unit instead of guessing at your
 supervisor.
 
 ### Calling it
+
+From Python, the simplest route is the bundled package: `pip install -e python` once, from
+this folder, then:
+
+```python
+import uibridge
+answer = uibridge.ask("Extract the sample size from this abstract: ...", model="gemini-pro")
+print(answer)            # the model's own text, unchanged
+```
+
+It starts the daemon if it is not running, raises typed errors that say what to do, and needs
+no other packages. [`docs/PYTHON.md`](docs/PYTHON.md) covers it end to end.
 
 It implements the text Chat Completions subset on `http://127.0.0.1:8477/v1`.
 Standard OpenAI clients work with the supported options below. No key is
@@ -525,7 +538,7 @@ The complete set, from a real response:
 | `provenance.modes` | Per-mode outcome (e.g. thinking) in the same shape as the model verdict. |
 | `provider_error_suspected`, `provider_error_match` | See *Answer integrity* below: a flag for an answer that opens like a failure but matches no measured wording, and the pattern that produced a positive verdict. |
 | `searched` | The UI's search affordance was used, as distinct from `browsed`. |
-| `json` | The parsed object when a `response_format` was requested and validated; `null` otherwise. |
+| `json` | The first JSON value in the answer, parsed, or `null` if there is none. It is filled on every answer: without a `response_format` nothing checked its shape; with `json_object` or `json_schema` the daemon validated it, and a non-conforming answer fails the request with 502 `invalid_response_format` instead. |
 | `extraction_warning` | Set when the tier that produced the text is weaker than the one that was expected. |
 | `provenance.model.applied` / `.verified` | Selection is read back from the UI and, where possible, checked against the response wire. `strictModel: true` (default) makes failed verification an error. Setting it to false permits unverified results, explicitly marked here. |
 | `thread_id` | The provider's native thread UUID from its URL. Pass it as top-level `thread_id` to continue that thread; omit it for a fresh isolated thread. |

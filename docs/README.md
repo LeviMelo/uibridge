@@ -5,6 +5,7 @@ Long-lived records that do not belong in `README.md` (which is for people
 
 | file | what it is |
 |---|---|
+| [PYTHON.md](PYTHON.md) | **Using uibridge from Python.** Setup from nothing, every option of `uibridge.ask`, what each error means and what to do about it, and running many requests safely. Written for someone who has never used it. Unlike the rest of this folder it is a guide, not a dated record. |
 | [UI-RECON.md](UI-RECON.md) | **The UI, as measured.** A by-hand survey of the Gemini and ChatGPT interfaces uibridge automates: composers and their decoys, submit and stop controls, the timing of a turn, thread identity, attachments, generated files, and where each of those traps you. Read this before touching a `selectors.json`. |
 | [PLAND.md](PLAND.md) | The original project handover: what uibridge is for, how it is built, what was measured along the way, and the rules that are not up for renegotiation. Parts are dated snapshots — it says so where that is true. |
 | [ISSUES_AND_FEATURE_REQUESTS.md](ISSUES_AND_FEATURE_REQUESTS.md) | A dated record of findings from live runs and what was done about each. Kept as memory, not as a live backlog. |

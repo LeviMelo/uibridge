@@ -252,6 +252,7 @@ test/api-conformance.mjs  the OpenAI surface, against a scripted provider
 test/cli.mjs        every command, flag and exit code, no chat UI
 test/acceptance.mjs live BRIDGE FIDELITY only - transport, not model quality
 examples/_client.py the client a pipeline copies
+                    (2026-09-10: superseded by the python/uibridge package - see docs/PYTHON.md)
 ```
 
 ### Request lifecycle (`src/session.mjs`)

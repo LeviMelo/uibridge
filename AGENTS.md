@@ -148,6 +148,13 @@ OK") **precisely so the answer's content is never the thing under test.**
 - **The CLI is a client of the API.** It must never grow its own inference,
   extraction or browser logic. One process per Chrome profile — two processes
   driving one profile is the bug the daemon exists to prevent.
+- **So is the Python package** (`python/uibridge`). It is a thin HTTP client:
+  it may resolve file paths, name errors, and restate envelope fields in plain
+  words (`Answer.warnings`) - nothing more. No text processing, no automatic
+  retry of an inference (a retry after the prompt may have gone out posts a
+  duplicate turn), no browser. Its only retry is after a REFUSED connection,
+  which proves nothing was sent. Its offline tests (`npm run test:python`)
+  start their own echo daemon and must never contact the user's real one.
 - **Authentication is mandatory.** No anonymous or degraded mode.
 - Use the providers' **native thread UUIDs**. Never invent an id.
 - **Canvas is out of scope.** No file-format-specific logic.

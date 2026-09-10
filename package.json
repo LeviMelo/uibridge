@@ -11,11 +11,14 @@
     "bin",
     "src",
     "README.md",
-    "examples/_client.py",
     "examples/hello.py",
     "examples/batch.py",
     "examples/durable_batch.py",
-    "config.example.json"
+    "config.example.json",
+    "python/uibridge",
+    "python/pyproject.toml",
+    "python/README.md",
+    "docs/PYTHON.md"
   ],
   "scripts": {
     "serve": "node bin/uibridge.mjs serve",
@@ -25,7 +28,8 @@
     "test": "node --test test/unit.mjs test/pool.mjs test/window.mjs test/api.mjs test/session.mjs test/reliability.mjs test/report-regressions.mjs test/api-conformance.mjs test/cli.mjs",
     "test:acceptance": "node test/acceptance.mjs",
     "serve:headed": "node bin/uibridge.mjs serve --headed",
-    "certify": "node test/certify.mjs"
+    "certify": "node test/certify.mjs",
+    "test:python": "python -m unittest discover -s python/tests -v"
   },
   "engines": {
     "node": ">=22"

@@ -1,21 +1,25 @@
 """
-Smallest possible use of uibridge. No dependencies - stdlib only.
+The smallest useful program.
 
     python examples/hello.py
 
-Needs two things first:
-  1. node bin/uibridge.mjs login gemini   (once, ever - you sign in yourself)
-  2. npm run serve                        (another terminal - it is the server)
+Once, before the first run:
+    uibridge login gemini     (a browser window opens - you sign in yourself)
+    pip install -e python     (from the uibridge folder)
+
+The first call starts uibridge in the background if it is not running yet.
 """
-import sys
-from pathlib import Path
+try:
+    import uibridge
+except ImportError:  # not pip-installed yet: use the copy in this repository
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+    import uibridge
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _client import call, require_server  # noqa: E402
+answer = uibridge.ask("In one sentence: what is a systematic review?", model="gemini-pro")
 
-require_server()
-
-print("asking gemini...\n")
-res = call("In one sentence: what is a systematic review?")
-print(res["text"])
-print(f"\n({res['ms'] / 1000:.1f}s)")
+print(answer)
+print(f"\n({answer.seconds:.1f}s, model verified: {answer.model_verified})")
+for note in answer.warnings:
+    print("note:", note)

@@ -1,30 +1,45 @@
 """
-What you actually need for LitScape: many calls at once, structured output,
-timing you can trust.
+Many calls at once, with answers whose SHAPE you can rely on.
 
     python examples/batch.py
 
-Fires 12 classification calls concurrently and reports real wall-clock timing,
-so you can see the concurrency working instead of taking my word for it.
+Classifies 12 study titles against an inclusion criterion, CONCURRENCY at a
+time, and reports real wall-clock timing so you can see the concurrency
+working instead of taking anyone's word for it.
+
+Two things this shows that matter in a review pipeline:
+
+  - schema=... makes the daemon VALIDATE each answer's JSON. An answer that
+    does not fit raises, instead of arriving as a half-parsed guess.
+  - a failed row is caught and reported; it does not end the whole batch.
+
+It prints what the model decided. It does not score whether it was right.
 """
-import sys
 import time
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _client import call, require_server  # noqa: E402
+try:
+    import uibridge
+except ImportError:  # not pip-installed yet: use the copy in this repository
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "python"))
+    import uibridge
 
-CONCURRENCY = 2          # match provider.concurrency in config.json
+MODEL = "gemini-pro"   # a specific id, so every row is attributable to one model
+CONCURRENCY = 2        # match providers.gemini.concurrency in config.json
 
+CRITERION = "Inclusion criterion: pediatric (<18y) anesthesia or procedural sedation."
 
-SCHEMA = """Return ONLY a JSON object, no prose:
-{"include": true|false, "population": "...", "reason": "..."}
-
-Inclusion criteria: pediatric (<18y) anesthesia or procedural sedation.
-
-Title/abstract:
-"""
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "include": {"type": "boolean"},
+        "population": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["include", "population", "reason"],
+}
 
 TITLES = [
     "Remimazolam for procedural sedation in children undergoing MRI",
@@ -42,28 +57,34 @@ TITLES = [
 ]
 
 
+def classify(title):
+    try:
+        return uibridge.ask(f"{CRITERION}\n\nTitle: {title}", model=MODEL, schema=SCHEMA)
+    except uibridge.BridgeError as err:
+        return err
+
+
 def main():
-    print(f"Firing {len(TITLES)} calls, {CONCURRENCY} at a time...\n")
+    print(f"Classifying {len(TITLES)} titles with {MODEL}, {CONCURRENCY} at a time...\n")
     t0 = time.time()
-
     with ThreadPoolExecutor(max_workers=CONCURRENCY) as pool:
-        results = list(pool.map(lambda t: call(SCHEMA + t), TITLES))
-
+        results = list(pool.map(classify, TITLES))
     total = time.time() - t0
 
-    hits = 0
-    for title, res in zip(TITLES, results):
-        data = res["json"] or {}
-        ok = data.get("include")
-        hits += 1 if res["json"] else 0
-        mark = "IN " if ok else "out" if ok is False else " ? "
-        print(f"  [{mark}] {(res['ms'] or 0)/1000:5.1f}s  {title[:62]}")
+    answered = [r for r in results if isinstance(r, uibridge.Answer)]
+    for title, r in zip(TITLES, results):
+        if isinstance(r, uibridge.BridgeError):
+            print(f"  [ERR] {r.code:<22} {title[:52]}")
+            continue
+        mark = "IN " if r.json["include"] else "out"
+        print(f"  [{mark}] {r.seconds:5.1f}s  {title[:62]}")
 
-    per_call = sum((r["ms"] or 0) for r in results) / len(results) / 1000
-    print(f"\n  wall clock     : {total:.1f}s")
-    print(f"  mean per call  : {per_call:.1f}s")
-    print(f"  speedup        : {per_call * len(TITLES) / total:.1f}x vs serial")
-    print(f"  valid JSON     : {hits}/{len(TITLES)}")
+    print(f"\n  wall clock      : {total:.1f}s")
+    if answered:
+        mean = sum(a.seconds for a in answered) / len(answered)
+        print(f"  mean per answer : {mean:.1f}s")
+        print(f"  speedup         : {mean * len(answered) / total:.1f}x vs one at a time")
+    print(f"  answered        : {len(answered)}/{len(TITLES)}")
 
 
 if __name__ == "__main__":
