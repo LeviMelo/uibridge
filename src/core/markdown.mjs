@@ -35,12 +35,51 @@ export function parseTables(md) {
   const lines = normalizeNewlines(md).split(NL)
   const isRow = (l) => /^\s*\|/.test(l ?? '')
   const isDelim = (l) => /^\s*\|[\s:|-]+\|\s*$/.test(l ?? '')
-  const cells = (l) =>
-    l
-      .trim()
-      .replace(/^\||\|$/g, '')
-      .split('|')
-      .map((c) => c.trim())
+  // SPLIT ON UNESCAPED PIPES ONLY.
+  //
+  // This was `.split('|')`, which breaks any row whose cell legitimately
+  // contains a pipe - and a cell containing a pipe is written `\\|`, which is
+  // exactly what a model emits when it writes about markdown, about a
+  // regex alternation, or about a units column like `mg\\|dL`. MEASURED
+  // 2026-09-09 on a live Gemini answer: `| Cell A \\| B |` came back as the
+  // cells `Cell A \\\\` and `B` plus a spurious extra column, and because
+  // header and row are then zipped by position, every later value in the
+  // row landed under the wrong heading. `text` was never affected - only
+  // the derived `tables`, which is the field a pipeline reads instead of
+  // re-parsing the prose.
+  //
+  // `\\\\` is consumed as a pair so that `\\\\|` stays a literal backslash
+  // followed by a REAL delimiter, rather than being re-read as an escaped
+  // pipe on the next character.
+  const cells = (l) => {
+    const line = l.trim()
+    const out = []
+    let cur = ''
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i]
+      if (c === '\\' && i + 1 < line.length) {
+        const next = line[i + 1]
+        if (next === '|' || next === '\\') {
+          cur += next
+          i++
+          continue
+        }
+      }
+      if (c === '|') {
+        out.push(cur)
+        cur = ''
+        continue
+      }
+      cur += c
+    }
+    out.push(cur)
+    // The row's own outer pipes produce an empty cell at each end. A row
+    // ending in an ESCAPED pipe has a non-empty last cell, so this cannot
+    // eat real content.
+    if (out.length > 1 && out[0].trim() === '') out.shift()
+    if (out.length > 1 && out[out.length - 1].trim() === '') out.pop()
+    return out.map((c) => c.trim())
+  }
 
   for (let i = 0; i < lines.length; i++) {
     if (!isRow(lines[i]) || !isDelim(lines[i + 1])) continue

@@ -1695,3 +1695,32 @@ test('the preview path finds its control by label in any of the measured spellin
     )
   }
 })
+
+
+test('a table cell may contain an escaped pipe', () => {
+  // MEASURED on a live Gemini answer 2026-09-09, not invented: any answer that
+  // talks about markdown, a regex alternation, or a units column like mg\\|dL
+  // writes one, and the old bare .split('|') turned the row into a
+  // stray-backslash cell plus a spurious column, zipping every later value
+  // under the wrong heading.
+  const B = String.fromCharCode(92)
+  const md = ['| A | B | C |', '| --- | --- | --- |', '| Cell A ' + B + '| B | y | z |'].join(NL)
+  const [t] = parseTables(md)
+  assert.deepEqual(t.header, ['A', 'B', 'C'])
+  assert.deepEqual(t.rows, [{ A: 'Cell A | B', B: 'y', C: 'z' }],
+    'the escaped pipe belongs INSIDE the first cell, and must not shift the rest of the row')
+})
+
+test('an escaped backslash before a pipe is a real cell boundary', () => {
+  const B = String.fromCharCode(92)
+  const md = ['| A | B |', '| --- | --- |', '| one ' + B + B + '| two |'].join(NL)
+  const [t] = parseTables(md)
+  assert.deepEqual(t.rows, [{ A: 'one ' + B, B: 'two' }],
+    'a literal backslash keeps the pipe after it as a delimiter')
+})
+
+test('escape handling does not disturb ordinary rows', () => {
+  const md = ['| A | B | C |', '| --- | --- | --- |', '| one || three |'].join(NL)
+  const [t] = parseTables(md)
+  assert.deepEqual(t.rows, [{ A: 'one', B: '', C: 'three' }], 'an empty cell stays an empty cell')
+})
