@@ -374,6 +374,48 @@ uibridge export chatgpt 6aa1deb0-… --files --json
 `mime` is null on this path and that is honest: the metadata response that names
 the type on the live path is never fetched here.
 
+### Superseded the next day: the file card (2026-09-10)
+
+**The route above works, and it was not the best one.** Every generated file
+also gets a *card* under the answer: a button labelled with the file's name,
+and beside it a download control. The user pointed it out. Every survey here
+had missed it, because each looked for the link in the text and for the
+preview panel and nothing else - the scripted-survey failure this document
+opens with, one level down: the probe reported every control it had been told
+to look for, and none it had not.
+
+```
+[data-testid^="conversation-turn-N"]          <- the TURN, not the message element
+  div.group/artifact-row
+    button[aria-label="guide_demo.csv"]         opens the preview panel
+    div   pointer-events:none, opacity:0  ->  auto, 1 while the row is hovered
+      span > button[aria-label="Baixar arquivo"]   downloads
+```
+
+| Click, on a reloaded thread | Result |
+|---|---|
+| the card's control, no hover | timed out - the wrapper takes no pointer events. 0 requests, 0 downloads |
+| hover the file's button, then click | `interpreter/download` (+107 ms), `estuary/content` (+1.4 s), browser download complete, 36 bytes. No panel |
+| wire tap on that `estuary/content` | saw the request, body `ERR_ABORTED` - a browser download, like the panel's |
+
+It is now the **first** route on a reloaded thread, ahead of the link (which
+issues no request there) and the panel (kept as the fallback for a file with
+no card). It is found from the file's **name**, so it does not depend on the
+UI language, which retires the pt-BR-only weakness of the panel route above.
+Its metadata response is an ordinary fetch, so it also reports the MIME type.
+
+**Verified end to end 2026-09-10**, on a thread from that day and one from the
+day before:
+
+```
+guide_demo.csv      36 bytes   mime text/csv   source browser
+diag_probe(1).csv   24 bytes   mime text/csv   source browser
+```
+
+The filled `mime` is what proves the card did it: the panel route cannot
+report one. The `(1)` in the second name is the server's own name for that
+file - the card route produced it too - not an artefact of either route.
+
 # What this survey changed
 
 | Finding | Status |
@@ -383,6 +425,7 @@ the type on the live path is never fetched here.
 | `message-actions` gained `Redo` | Note in `gemini/selectors.json` is stale by one entry; selector unaffected |
 | Gemini model labels now version-prefixed (`3.1 Pro`) | Existing regexes verified live, still correct |
 | `export --files` could not retrieve a file from a reloaded thread | **Fixed** — the message link only opens the preview panel there; the panel's own control downloads, and the bytes arrive as a browser download, not on the wire |
+| The file card under every generated file | **Found by the user**, measured, now the first route on a reloaded thread - one hover and one click, found by name, language-independent |
 
 Confirmed correct by independent measurement, having been taken on trust
 before: Gemini has no file input (`cdp-drag`); the `You said` duplication and

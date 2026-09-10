@@ -174,7 +174,13 @@
     "contentPattern": "/backend-api/estuary/content",
     "previewPanel": "[data-testid=\"artifact-preview-surface-shell\"], [data-testid=\"stage-thread-flyout\"]",
     "previewDownload": "Baixar|Download|Descargar|Télécharger|Herunterladen|Scarica",
-    "previewClose": "[data-testid=\"close-button\"]"
+    "previewClose": "[data-testid=\"close-button\"]",
+    "card": {
+      "scope": "[data-testid^=\"conversation-turn-\"]",
+      "control": "button[aria-label] + div > span > button",
+      "file": "button[aria-label=\"{name}\"]",
+      "download": "button[aria-label=\"{name}\"] + div > span > button"
+    }
   },
   "transientText": [
     "Pesquisando",
@@ -272,6 +278,49 @@
     "[class*=artifact] already matches something on a thread page before any",
     "click, so it would have reported 'progressed' unconditionally."
   ],
+  "_fileCard": [
+    "MEASURED 2026-09-10. Found by the USER, not by any survey here: every",
+    "generated file also gets a CARD under the answer - a button labelled with",
+    "the file's NAME, then a download control. The surveys before this looked",
+    "for the link in the text and for the preview panel, and never saw it.",
+    "",
+    "Shape, read by hand in a real Chrome and again in uibridge's own:",
+    "  div.group/artifact-row",
+    "    button[aria-label=<file name>]          opens the preview panel",
+    "    div   pointer-events:none, opacity:0 until the row is hovered",
+    "      span > button[aria-label='Baixar arquivo']   downloads",
+    "It sits in the TURN ([data-testid^=conversation-turn-]), OUTSIDE the",
+    "message element [data-message-id] - which is why scoping retrieval to the",
+    "message never found it. Present on a freshly loaded thread: checked on one",
+    "generated 2026-09-10 and on one generated the day before.",
+    "",
+    "One click, instrumented (Network + Browser.downloadWillBegin), on a",
+    "reloaded thread:",
+    "  click, no hover        timed out - the wrapper takes no pointer events.",
+    "                         0 requests, 0 downloads.",
+    "  hover the file button, then click",
+    "                         +107ms GET interpreter/download",
+    "                         +1.4s  GET estuary/content",
+    "                         browser download 'guide_demo.csv', 36 bytes.",
+    "                         No panel opened.",
+    "  wire tap on estuary    saw the request, then ERR_ABORTED: a browser",
+    "                         download, exactly like the panel's.",
+    "",
+    "Preferred over both other routes on a reloaded thread: the link in the",
+    "text issues no request there at all, and the panel route is two clicks",
+    "plus a close, matched on a label measured in pt-BR only. The card is one",
+    "hover and one click, found from the file's NAME - `file` and `download`",
+    "take {name} - so it does not depend on the UI language. Its metadata",
+    "response is an ordinary fetch the tap CAN read, so it also yields the MIME",
+    "type the panel route could not.",
+    "",
+    "VERIFIED end to end 2026-09-10 through `export --files`, on a thread from",
+    "that day and one from the day before: guide_demo.csv 36 bytes and",
+    "diag_probe(1).csv 24 bytes, both mime text/csv, source browser. A filled",
+    "mime is what proves the card did it - the panel route cannot report one.",
+    "The '(1)' is the server's own name for that file; the card route produced",
+    "it too."
+  ],
   "_previewDownload": [
     "MEASURED 2026-09-09, and it settles a defect that had been open since",
     "2026-09-08: `export --files` could not retrieve a file from a thread the",
@@ -312,7 +361,11 @@
     "the hash changes with every asset deploy. Its neighbour 'Tela cheia'",
     "(fullscreen) carries the identical class list. Only the pt-BR spelling",
     "was measured here; the others are the same kind of alternation `notices`",
-    "already uses, and a miss is reported honestly rather than guessed past."
+    "already uses, and a miss is reported honestly rather than guessed past.",
+    "",
+    "2026-09-10: NO LONGER THE FIRST ROUTE on a reloaded thread - see _fileCard.",
+    "The card under the answer fetches the file in one hover and one click,",
+    "found by name. This route is kept as the fallback for a file with no card."
   ],
   "_generatedFile": [
     "MEASURED 2026-09-06 on real code-interpreter turns, end to end.",

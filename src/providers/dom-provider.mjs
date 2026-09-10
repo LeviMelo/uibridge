@@ -34,6 +34,7 @@ import { WireTap } from '../transports/wire.mjs'
 import { nudgeOnScreen } from '../core/window.mjs'
 import { fillComposer, normalizeComposerText, readComposer } from '../core/composer.mjs'
 import { captureDownload, previewProgressed } from '../transports/files-wire.mjs'
+import { cardFor, cardNames, downloadFromCard } from '../transports/file-card.mjs'
 import { classifyAnswer, errorPatterns } from '../core/answer-integrity.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
@@ -511,10 +512,37 @@ export class DomProvider extends Provider {
         }
         continue
       }
+      // The FILE CARD, when the provider has one. It lives in the message's
+      // TURN, outside the message element itself - which is why retrieval
+      // scoped to `host` never found it. See `_fileCard`.
+      const turn = g.card?.scope
+        ? page.locator(g.card.scope).filter({ has: page.locator(selector) }).first()
+        : host
+      const cards = await cardNames(turn, g)
       const controls = host.locator(g.control)
       const controlCount = await controls.count().catch(() => 0)
       for (let i = 0; i < message.file_controls.length; i++) {
         const fallbackName = message.file_controls[i] || `download-${i + 1}.bin`
+        // The card goes FIRST on this path. The link is measured to issue no
+        // request at all on a reloaded thread - it only opens the preview
+        // panel - so leading with it spent several doomed clicks per file,
+        // each toggling that panel. The card fetches the file directly. The
+        // link and the panel stay as the fallbacks for a file with no card.
+        const cardName = cardFor(cards, message.file_controls[i])
+        const viaCard = cardName
+          ? await downloadFromCard(page, g, {
+            scope: turn, name: cardName, tap,
+            dir: this.settings.downloadDir, downloadMs: this.settings.fileWaitMs, log: this.log,
+          }).catch((err) => {
+            this.log?.debug(`the file card did not yield ${cardName}: ${err.message.split('\n')[0]}`)
+            return null
+          })
+          : null
+        if (viaCard) {
+          files.push({ ...viaCard, message_id: message.id })
+          onFile?.(viaCard)
+          continue
+        }
         if (i >= controlCount) {
           files.push({ name: fallbackName, message_id: message.id, error: 'the download control is no longer rendered on this message' })
           continue

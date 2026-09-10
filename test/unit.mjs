@@ -1724,3 +1724,42 @@ test('escape handling does not disturb ordinary rows', () => {
   const [t] = parseTables(md)
   assert.deepEqual(t.rows, [{ A: 'one', B: '', C: 'three' }], 'an empty cell stays an empty cell')
 })
+
+import { cardFor, downloadFromCard } from '../src/transports/file-card.mjs'
+
+test('a file link with a single card on its turn is that card', () => {
+  // The link label is the model's own prose, so with one card nothing needs matching.
+  assert.equal(cardFor(['guide_demo.csv'], 'Here is your file'), 'guide_demo.csv')
+})
+
+test('with several cards, the one the link names is chosen', () => {
+  assert.equal(cardFor(['a.csv', 'b.csv'], 'Download b.csv'), 'b.csv')
+})
+
+test('a name that is only part of a longer match does not make a link ambiguous', () => {
+  // "Download data.csv" contains "a.csv" too; the longer, complete match wins.
+  assert.equal(cardFor(['a.csv', 'data.csv'], 'Download data.csv'), 'data.csv')
+})
+
+test('a link that names no card, or two, is not guessed at', () => {
+  assert.equal(cardFor(['a.csv', 'b.csv'], 'Download it here'), null, 'no match must fall back, not pick one')
+  assert.equal(cardFor(['x.csv', 'y.csv'], 'Download x.csv and y.csv'), null)
+  assert.equal(cardFor([], 'Download x.csv'), null)
+})
+
+test('the card route declines without a measured card, and never touches the page', async () => {
+  const page = { locator: () => { throw new Error('must not touch the page without a measured card') } }
+  assert.equal(await downloadFromCard(page, { previewPanel: '#p' }, { name: 'x.csv' }), null)
+  assert.equal(await downloadFromCard(page, { card: { file: 'f', download: 'd' } }, {}), null, 'no name, no route')
+})
+
+test('a card that is not on the page is a miss, not a click', async () => {
+  const absent = {
+    count: async () => 0,
+    hover: async () => { throw new Error('must not hover a card that is not there') },
+    click: async () => { throw new Error('must not click a card that is not there') },
+  }
+  const scope = { locator: () => ({ first: () => absent }) }
+  const spec = { card: { file: 'button[aria-label="{name}"]', download: 'button[aria-label="{name}"] + div > span > button' } }
+  assert.equal(await downloadFromCard(scope, spec, { scope, name: 'x.csv' }), null)
+})

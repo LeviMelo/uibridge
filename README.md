@@ -607,12 +607,12 @@ once in `files_skipped` rather than pretending the thread had none.
 thread the browser has merely reloaded is not the same mechanism as receiving
 one as it is generated. `wire` means the page fetched the file and uibridge
 read the response, which is what happens at generation time and carries the
-server's own name and MIME type. `browser` means the message's link no longer
-fetches anything and only opens the file preview panel, so the download was
-taken from that panel and arrived as an ordinary browser download - the bytes
-are byte-exact either way, but `mime` is null, since the metadata response
-that names the type is never fetched on that path. Both are measured; see
-`docs/UI-RECON.md`.
+server's own name and MIME type. `browser` means the file arrived as an ordinary browser download, taken from
+the file's card under the answer: on a reloaded thread the message's link no
+longer fetches anything, it only opens a preview panel. The card's route still
+reads the server's MIME type; `mime` is null only when a file had no card and
+the preview panel's own button was used instead. The bytes are byte-exact
+either way. All three routes are measured; see `docs/UI-RECON.md`.
 
 These chat UIs virtualize their history: on a 34-message thread only six
 messages exist in the document at any moment, so an export is a walk, and
