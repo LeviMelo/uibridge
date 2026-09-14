@@ -15,7 +15,8 @@
       "headless": true
     },
     "chatgpt": {
-      "headless": "offscreen"
+      "headless": "offscreen",
+      "concurrency": 4
     }
   }
 }

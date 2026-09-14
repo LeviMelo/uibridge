@@ -14,7 +14,7 @@
 // first question is always "which selector stopped matching?", and that
 // deserves a real tool rather than a probe rewritten each time.
 
-import { loadConfig, providerSettings, portFor, ROOT, HOME, VERSION } from '../src/core/config.mjs'
+import { loadConfig, providerSettings, portFor, withConcurrency, ROOT, HOME, VERSION } from '../src/core/config.mjs'
 import { resolve } from 'node:path'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
@@ -47,7 +47,7 @@ function usage(code = 0) {
   console.log(`
 uibridge - a local OpenAI-compatible API backed by chat UIs you already pay for
 
-  uibridge serve                      start the API (default port ${cfg.port})
+  uibridge serve [--concurrency=N]    start the API (default port ${cfg.port}); N tabs per provider
   uibridge login <provider>           open a window and sign in
   uibridge logout <provider>          clear the dedicated profile's site session
   uibridge status [provider] [--json] report authenticated profile state
@@ -895,11 +895,17 @@ try {
     // is for watching it work, which is the only way some UI bugs are ever
     // found.
     const headed = rest.includes('--headed') || rest.includes('--no-headless')
+    // --concurrency=N: tabs per provider for this run. The config file's
+    // value (per provider, or the shared `provider.concurrency`) is the
+    // default; the flag is how a batch job asks for more without editing
+    // a file it does not own.
+    const concurrencyArg = rest.find((a) => a.startsWith('--concurrency='))
+    const base = concurrencyArg ? withConcurrency(cfg, concurrencyArg.slice('--concurrency='.length)) : cfg
     // Fall back to the CONFIGURED value, not to undefined: writing undefined
     // unconditionally made UIBRIDGE_HEADED (and any windowModeOverride in
     // config) inert for the daemon, which is the one process that matters.
     await serve({
-      ...cfg,
+      ...base,
       windowModeOverride: headed ? false : rest.includes('--headless') ? true : cfg.windowModeOverride,
     })
   }

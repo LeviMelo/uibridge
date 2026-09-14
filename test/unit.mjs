@@ -1763,3 +1763,16 @@ test('a card that is not on the page is a miss, not a click', async () => {
   const spec = { card: { file: 'button[aria-label="{name}"]', download: 'button[aria-label="{name}"] + div > span > button' } }
   assert.equal(await downloadFromCard(scope, spec, { scope, name: 'x.csv' }), null)
 })
+
+
+test('withConcurrency sets every provider pool for the run and leaves the file config alone', async () => {
+  const { withConcurrency, providerSettings } = await import('../src/core/config.mjs')
+  const cfg = { home: '.', downloadDir: 'downloads', profileDir: '.profiles', ledgerDir: 'ledger', provider: { concurrency: 2, minIntervalMs: 20000 }, providers: { chatgpt: { headless: 'offscreen' }, gemini: {} } }
+  const run = withConcurrency(cfg, '4')
+  assert.equal(run.provider.concurrency, 4)
+  assert.equal(providerSettings(run, 'chatgpt', { concurrency: 1 }).concurrency, 4, 'beats the provider default')
+  assert.equal(providerSettings(run, 'chatgpt', { concurrency: 1 }).minIntervalMs, 20000, 'pacing untouched')
+  assert.equal(cfg.provider.concurrency, 2, 'the config object is not mutated')
+  assert.throws(() => withConcurrency(cfg, '0'))
+  assert.throws(() => withConcurrency(cfg, 'many'))
+})

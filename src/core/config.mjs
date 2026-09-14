@@ -247,6 +247,24 @@ export function providerSettings(cfg, id, providerDefaults = {}) {
   return s
 }
 
+/**
+ * `--concurrency=N` for `serve`: the tab pool size of EVERY provider, over
+ * the provider's own default and whatever config.json says. A number given
+ * on the command line is the operator's decision for this run; it does not
+ * touch pacing (`minIntervalMs`), which stays the floor between request
+ * starts however many tabs there are. Returns a new config; `cfg` is not
+ * mutated, so a config object shared with tests keeps its file values.
+ */
+export function withConcurrency(cfg, n) {
+  const value = Number(n)
+  if (!Number.isInteger(value) || value < 1 || value > 16) {
+    throw new Error(`--concurrency must be an integer from 1 to 16, not ${JSON.stringify(n)}`)
+  }
+  const providers = {}
+  for (const id of Object.keys(cfg.providers ?? {})) providers[id] = { ...(cfg.providers[id] ?? {}), concurrency: value }
+  return { ...cfg, provider: { ...cfg.provider, concurrency: value }, providers }
+}
+
 /** Deterministic debugging port per provider. */
 export function portFor(cfg, id, index) {
   return cfg.providers?.[id]?.debugPort ?? cfg.basePort + index
