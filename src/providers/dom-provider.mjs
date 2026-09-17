@@ -38,6 +38,16 @@ import { cardFor, cardNames, downloadFromCard } from '../transports/file-card.mj
 import { classifyAnswer, errorPatterns } from '../core/answer-integrity.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 
+/**
+ * True when a decoded response stream is not the whole turn: it ended
+ * without its finish marker and the page still shows the turn generating.
+ * Either alone is not it - a finished stream can leave a lingering stop
+ * control, and an unfinished one on a quiet page is a genuine cut-off.
+ */
+export function wireContinues(decoded, generating) {
+  return !!decoded && !decoded.finished && !!generating
+}
+
 const cdpSessions = new WeakMap()
 async function cdp(page) {
   if (!cdpSessions.has(page)) cdpSessions.set(page, await page.context().newCDPSession(page))
@@ -428,6 +438,7 @@ export class DomProvider extends Provider {
   async currentThread(page, ctx = {}) {
     // The answer stream carries the authoritative conversation identity.
     if (ctx.wireResult?.decoded?.conversationId) return ctx.wireResult.decoded.conversationId
+    if (ctx.wireProvenance?.conversationId) return ctx.wireProvenance.conversationId
     const current = new URL(page.url())
     if (current.origin !== this.origin || !this.sel.thread?.urlPattern) return null
     const fromUrl = current.pathname.match(new RegExp(this.sel.thread.urlPattern))?.[1] ?? null
@@ -1125,7 +1136,24 @@ export class DomProvider extends Provider {
     // file-producing turn), the provider's otherwise.
     const cfg = { ...this.settings, responseTimeoutMs: ctx.responseTimeoutMs ?? this.settings.responseTimeoutMs }
 
-    if (ctx.wire && (await this.#awaitWire(ctx))) return ctx
+    if (ctx.wire && (await this.#awaitWire(ctx))) {
+      // A stream that closed without its finish marker while the page still
+      // shows the turn generating is a turn that went on past its first
+      // connection: ChatGPT runs its tools (the sandbox that writes a DOCX)
+      // across several. The first stream's text is the model's plan, not
+      // its answer, and the files are not in it. c1 (2026-09-14) and c2
+      // (2026-09-17) each came back that way as "truncated" after 500 s.
+      // The page path waits for the generating control to clear and reads
+      // the files off the rendered turn; the wire's provenance is kept.
+      if (wireContinues(ctx.wireResult?.decoded, await isGenerating(page, s.stopButton))) {
+        this.log?.warn('the response stream closed without finishing while the turn is still generating; following it on the page')
+        ctx.wireProvenance = { sentAs: ctx.wireResult.sentAs, sentEffort: ctx.wireResult.sentEffort, conversationId: ctx.wireResult.decoded.conversationId ?? null }
+        ctx.wireContinued = true
+        ctx.wireResult = null
+      } else {
+        return ctx
+      }
+    }
 
     // A turn appears within a second or two of a real submission, so this
     // gets its OWN short budget rather than the full response timeout.
@@ -1351,6 +1379,9 @@ export class DomProvider extends Provider {
       browsed,
       searched,
       truncated: !!ctx.truncated,
+      ...(ctx.wireProvenance
+        ? { sent_as: ctx.wireProvenance.sentAs, sent_effort: ctx.wireProvenance.sentEffort, wire_continued: true }
+        : {}),
     }
   }
 

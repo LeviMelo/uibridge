@@ -1776,3 +1776,15 @@ test('withConcurrency sets every provider pool for the run and leaves the file c
   assert.throws(() => withConcurrency(cfg, '0'))
   assert.throws(() => withConcurrency(cfg, 'many'))
 })
+
+
+test('a stream that closed unfinished while the turn still generates is followed on the page', async () => {
+  const { wireContinues } = await import('../src/providers/dom-provider.mjs')
+  // the case: [DONE] never came and the stop control is still up
+  assert.equal(wireContinues({ finished: false, text: 'plan...' }, true), true)
+  // a finished stream with a lingering stop control is a finished answer
+  assert.equal(wireContinues({ finished: true, text: 'answer' }, true), false)
+  // an unfinished stream on a quiet page is a genuine cut-off, reported as such
+  assert.equal(wireContinues({ finished: false, text: 'partial' }, false), false)
+  assert.equal(wireContinues(null, true), false)
+})
