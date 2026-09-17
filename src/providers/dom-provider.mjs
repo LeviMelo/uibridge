@@ -280,7 +280,7 @@ export class DomProvider extends Provider {
    * again. The error thrown on the last attempt is the real one, not a
    * timeout with the cause hidden.
    */
-  async clickThrough(locator, { attempts = 3, timeout = 6000, what = 'a control' } = {}) {
+  async clickThrough(locator, { attempts = 3, timeout = 6000, what = 'a control', scroll = true } = {}) {
     const page = locator.page()
     let last = null
     // Any notice that was up while a click failed is a candidate explanation,
@@ -296,7 +296,18 @@ export class DomProvider extends Provider {
       // CENTRE IT FIRST. "Scrolled into view" is not the same as clickable:
       // a link at the bottom of a thread ends up under the sticky composer,
       // and a coordinate click then lands on the composer instead.
-      await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest' })).catch(() => {})
+      //
+      // NOT FOR A CONTROL THAT LIVES IN THE STICKY CHROME. MEASURED
+      // 2026-09-17 on ChatGPT: with a file attached and a prompt of more
+      // than a few lines the composer is tall enough to scroll, and centring
+      // its send button scrolls that inner region; the click that follows
+      // is accepted by the browser and ignored by the app, on every attempt,
+      // and the request ends `submit_failed` with the prompt still in the
+      // composer. The same click without the scroll submits at once. A
+      // caller whose control is always on screen says `scroll: false`.
+      if (scroll) {
+        await locator.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'nearest' })).catch(() => {})
+      }
 
       try {
         if (i === 1) {
@@ -1043,9 +1054,23 @@ export class DomProvider extends Provider {
     const fire = async () => {
       if (s.submitKey) return composer.press(s.submitKey)
       await this.requireContract(page, 'sendButton', s.sendButton)
+      const send = page.locator(s.sendButton).first()
+      // THE APP'S OWN "NOT YET". MEASURED 2026-09-17 on ChatGPT: for a few
+      // seconds after an upload is confirmed on the wire the send button
+      // carries aria-disabled="true" while the site finishes with the file;
+      // Playwright clicks it regardless and the app drops the click. Waiting
+      // for the attribute to clear costs those seconds once instead of a
+      // wasted attempt plus an 8s confirmation window. Bounded: a site that
+      // never clears it is reported by the click path, not waited on.
+      await waitFor(
+        async () => ((await send.getAttribute('aria-disabled').catch(() => null)) === 'true' ? null : true),
+        { timeout: this.settings.uploadTimeoutMs ?? 30000, poll: this.settings.pollMs, what: 'the send button to be enabled' }
+      ).catch(() => {})
       // Through any blocking notice: the rate-limit modal covers the
       // composer too, and a swallowed send presents as "no turn appeared".
-      await this.clickThrough(page.locator(s.sendButton).first(), { timeout: 15000, what: 'the send button' })
+      // The send button sits in the sticky composer and is always on
+      // screen, so it is never scrolled (see clickThrough).
+      await this.clickThrough(send, { timeout: 15000, what: 'the send button', scroll: false })
     }
 
     await fillComposer(composer, prompt)
