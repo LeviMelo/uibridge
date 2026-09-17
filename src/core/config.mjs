@@ -117,7 +117,11 @@ const DEFAULTS = {
     // sitting for the full response timeout with a misleading message.
     submitAckMs: 60000,
     responseTimeoutMs: 600000,
-    uploadTimeoutMs: 180000,
+    // Ten PDFs in one prompt go through the app's own upload pipeline one
+    // by one; on a slow link that is more than three minutes (2026-09-17:
+    // eight of ten such batches timed out at 180 s). The budget covers the
+    // whole batch, so it is a response-sized budget, not a network one.
+    uploadTimeoutMs: 600000,
     fileWaitMs: 20000,
     pollMs: 150,
     // Consecutive identical reads that mean "finished". A measurement of
