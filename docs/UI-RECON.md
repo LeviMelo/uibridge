@@ -432,3 +432,52 @@ before: Gemini has no file input (`cdp-drag`); the `You said` duplication and
 its `textExclude`; `message-content-id-r_…` identity; ChatGPT's attachment span
 and its re-rendered label; `button.behavior-btn`; Enter not submitting on
 Gemini.
+
+## ChatGPT: the which-answer-do-you-prefer test — REPORTED, NOT YET MEASURED (2026-09-17)
+
+The user reported that ChatGPT sometimes answers a turn with two candidate
+responses side by side and asks which is preferred. The wording they read
+off the page, verbatim:
+
+```
+Você está dando feedback sobre uma nova versão do ChatGPT.
+Qual resposta você prefere? Elas podem demorar um pouco para carregar.
+```
+
+Why it matters here rather than being a curiosity: **the turn is not
+committed until a choice is made, and the composer refuses the next prompt
+while it is pending.** So the damage is not confined to the request that
+met it. That request returns the chooser's own words as if the model had
+said them, and every later request on the same thread fails at
+`submit_failed` with nothing naming the cause. A review pipeline running
+overnight simply stops producing answers.
+
+**What this build does.** `showsResponseComparison` matches the wording in
+`selectors.json` (`comparisonText`). On a match the provider dumps the page
+to `testdata/capture/comparison-<stamp>/` (gitignored — the HTML carries
+conversation content), reloads the thread, and **reads back** whether the
+chooser cleared. Cleared: the committed turn is taken, and the envelope
+says `response_comparison: "resolved_by_reload"`. Still there: the request
+ends with 503 `response_comparison` rather than wedging the thread in
+silence.
+
+**What has NOT been measured, and is the next job.** Nobody has had this
+state open with a DOM inspector, so:
+
+- the controls that choose a candidate are unknown. That is why this build
+  does not click one. A reload is a blunt instrument: it relies on the site
+  resolving the pending turn by itself, which is *checked* here but not
+  understood.
+- only the Portuguese wording is listed. The English original has not been
+  read off a page by anyone here, and `AGENTS.md` is explicit that inventing
+  it would be worse than leaving it out.
+- whether the two candidates render as two `[data-message-author-role='assistant']`
+  blocks, or one block with two panes, is unknown. If it is two, the
+  response index computed by `responseProbe` picks the *last* changed block,
+  which is an arbitrary one of the two.
+
+When it next appears, open the dump in `testdata/capture/comparison-*`,
+measure the buttons, put them in `selectors.json`, and click the first
+candidate. Then the answer is kept deliberately instead of being left to
+whatever the reload does, and this section gets rewritten with the date on
+which it was finally measured.

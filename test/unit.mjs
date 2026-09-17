@@ -1788,3 +1788,22 @@ test('a stream that closed unfinished while the turn still generates is followed
   assert.equal(wireContinues({ finished: false, text: 'partial' }, false), false)
   assert.equal(wireContinues(null, true), false)
 })
+
+test('the which-answer-do-you-prefer test is recognised only by wording that was actually read', async () => {
+  const { showsResponseComparison } = await import('../src/providers/dom-provider.mjs')
+  const { ROOT } = await import('../src/core/config.mjs')
+  const sel = JSON.parse(readFileSync(join(ROOT, 'src/providers/chatgpt/selectors.json'), 'utf8'))
+  const pattern = sel.comparisonText
+  // REPORTED 2026-09-17, verbatim from the page
+  const page = 'Você está dando feedback sobre uma nova versão do ChatGPT.\n'
+    + 'Qual resposta você prefere? Elas podem demorar um pouco para carregar.'
+  assert.equal(showsResponseComparison(page, pattern), true)
+  assert.equal(showsResponseComparison('an ordinary answer about PRISMA', pattern), false)
+  // a provider whose wording nobody has read must never be matched by a
+  // pattern invented here: no pattern, no verdict
+  assert.equal(showsResponseComparison(page, null), false)
+  assert.equal(showsResponseComparison('', pattern), false)
+  // the selectors say what has NOT been measured, so the next agent clicks
+  // the control instead of relying on the reload
+  assert.ok(sel._comparison.some((l) => l.includes('NOT MEASURED')), 'say what was not measured')
+})

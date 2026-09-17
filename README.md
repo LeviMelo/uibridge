@@ -540,6 +540,7 @@ The complete set, from a real response:
 | `searched` | The UI's search affordance was used, as distinct from `browsed`. |
 | `json` | The first JSON value in the answer, parsed, or `null` if there is none. It is filled on every answer: without a `response_format` nothing checked its shape; with `json_object` or `json_schema` the daemon validated it, and a non-conforming answer fails the request with 502 `invalid_response_format` instead. |
 | `extraction_warning` | Set when the tier that produced the text is weaker than the one that was expected. |
+| `response_comparison` | Present when the turn came out of the site's which-answer-do-you-prefer test, and says how it was resolved (`resolved_by_reload`). The text is one of the two candidates the site produced, not a merge of them. |
 | `provenance.model.applied` / `.verified` | Selection is read back from the UI and, where possible, checked against the response wire. `strictModel: true` (default) makes failed verification an error. Setting it to false permits unverified results, explicitly marked here. |
 | `thread_id` | The provider's native thread UUID from its URL. Pass it as top-level `thread_id` to continue that thread; omit it for a fresh isolated thread. |
 | `provenance.final_state` | The picker label read *after* model and modes were both applied. The per-step labels are stale by then. |
@@ -690,6 +691,7 @@ retryable.
 | 503 | `challenge` | A verification challenge is up. uibridge never solves or evades one: clear it in the browser window. |
 | 503 | `network`, `network_blocked`, `browser_gone` | This machine could not reach the site, was blocked by a local proxy/certificate policy, or lost the browser. Only the first and last are `retryable`. |
 | 503 | `thread_unavailable`, `thread_history_unavailable` | The thread would not open, or its history would not load. |
+| 503 | `response_comparison` | The site answered with two candidate responses and asked which is preferred. The turn is not committed until one is chosen and the composer refuses the next prompt meanwhile, so the whole thread is blocked, not just this request. uibridge reloads the thread and checks whether that cleared it; this code means it did not. Answer the question in the visible window, or run `uibridge serve --headed` to see it. The DOM is dumped to `testdata/capture/comparison-*` so the controls can be measured. |
 | 503 | `browser_unavailable`, `pool_closed`, `session_closed`, `shutting_down`, `queue_full`, `request_store_unavailable` | uibridge itself is not in a position to serve this right now. |
 | 503 | `daemon_not_running`, `daemon_start_failed`, `daemon_incompatible` | CLI-side: no daemon, it would not start, or the port belongs to another build. |
 | 504 | `timeout`, `request_timeout` | A wait exceeded its budget. |

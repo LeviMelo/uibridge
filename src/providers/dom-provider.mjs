@@ -48,6 +48,24 @@ export function wireContinues(decoded, generating) {
   return !!decoded && !decoded.finished && !!generating
 }
 
+/**
+ * Is the page asking which of two candidate responses is preferred?
+ *
+ * ChatGPT sometimes answers one turn with two candidates and asks the
+ * reader to choose (REPORTED 2026-09-17; the wording is in the provider's
+ * selectors, where only OBSERVED locales are listed). Until a choice is
+ * made the turn is not committed and the composer refuses the next prompt,
+ * so the whole thread is wedged and not merely this request.
+ *
+ * `pattern` is the provider's own; with none configured this is always
+ * false, because a provider whose wording nobody has read must not be
+ * matched by a pattern invented here (AGENTS.md).
+ */
+export function showsResponseComparison(bodyText, pattern) {
+  if (!pattern || !bodyText) return false
+  return new RegExp(pattern, 'i').test(bodyText)
+}
+
 const cdpSessions = new WeakMap()
 async function cdp(page) {
   if (!cdpSessions.has(page)) cdpSessions.set(page, await page.context().newCDPSession(page))
@@ -1151,6 +1169,11 @@ export class DomProvider extends Provider {
         ctx.wireContinued = true
         ctx.wireResult = null
       } else {
+        // The answer is in hand, but the page can still be holding the
+        // which-answer-do-you-prefer chooser: the turn is uncommitted and
+        // the composer will refuse the NEXT prompt on this thread. Clear it
+        // now, while this request still owns the tab.
+        await this.resolveResponseComparison(page, ctx)
         return ctx
       }
     }
@@ -1232,7 +1255,89 @@ export class DomProvider extends Provider {
         this.log?.warn('the answer text stabilized but the generating control did not clear; returning it as truncated')
       })
     }
+    await this.resolveResponseComparison(page, ctx)
     return ctx
+  }
+
+  /**
+   * The site asked which of two candidate responses is preferred.
+   *
+   * This is not a verification challenge and not a notice: it is a product
+   * experiment rendered inside the conversation. It matters here because
+   * the turn is NOT committed until a choice is made, and the composer
+   * refuses the next prompt meanwhile - so left alone it returns the
+   * chooser's own words as the model's answer and wedges every later
+   * request on the thread at `submit_failed`, with nothing naming why.
+   *
+   * The controls that choose a candidate have never been measured, so this
+   * does not click one. It dumps the page for whoever measures them next,
+   * reloads the thread, and READS BACK whether the chooser cleared. A
+   * reload that resolved it leaves the committed turn as the last assistant
+   * block; one that did not ends the request with a typed error, because
+   * one named failure is better than a thread that fails silently from here
+   * on.
+   */
+  async resolveResponseComparison(page, ctx) {
+    const s = this.sel
+    if (!s.comparisonText) return
+    const body = await page.locator('body').innerText().catch(() => '')
+    if (!showsResponseComparison(body, s.comparisonText)) return
+
+    const seen = body.match(new RegExp(s.comparisonText, 'i'))?.[0] ?? ''
+    this.log?.warn(`the site is asking which of two responses is preferred ("${seen}"); the turn is not committed until it is answered`)
+    const dump = await this.captureComparison(page).catch(() => null)
+
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {})
+    await this.requireComposer(page, { timeout: 30000, where: 'after a response comparison' }).catch(() => {})
+    const after = await page.locator('body').innerText().catch(() => '')
+    if (showsResponseComparison(after, s.comparisonText)) {
+      throw new BridgeError(
+        `${this.id}: the site is asking which of two responses is preferred and the thread cannot continue until it is answered`,
+        { status: 503, code: 'response_comparison', retryable: true,
+          detail: { seen, dom_capture: dump, thread_id: ctx.threadId ?? null } }
+      )
+    }
+
+    ctx.responseComparison = 'resolved_by_reload'
+
+    // The answer was already decoded off the wire: the reload was only ever
+    // about unwedging the thread, so an empty page is not a lost answer.
+    if (ctx.wireResult?.decoded?.text) {
+      this.log?.warn('the comparison cleared on reload; the wire answer stands')
+      return
+    }
+
+    // Otherwise the committed turn is the last assistant block on the
+    // reloaded thread; the index computed before the reload described a DOM
+    // that no longer exists.
+    const texts = await this.responseTexts(page)
+    const last = texts.length - 1
+    if (last < 0 || !texts[last]) {
+      throw new BridgeError(
+        `${this.id}: a response comparison cleared on reload but left no answer on the thread`,
+        { status: 503, code: 'response_comparison', retryable: true,
+          detail: { seen, dom_capture: dump, thread_id: ctx.threadId ?? null } }
+      )
+    }
+    ctx.index = last
+    this.log?.warn('the comparison cleared on reload; taking the committed turn')
+  }
+
+  /**
+   * Dump the page while a response comparison is up, so its controls can be
+   * measured rather than guessed next time. Into a gitignored subfolder:
+   * the HTML carries conversation content and must never reach a commit.
+   */
+  async captureComparison(page) {
+    const { mkdir, writeFile } = await import('node:fs/promises')
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const { ROOT } = await import('../core/config.mjs')
+    const dir = resolvePath(ROOT, 'testdata', 'capture', `comparison-${stamp}`)
+    await mkdir(dir, { recursive: true })
+    await writeFile(resolvePath(dir, 'page.html'), await page.content(), 'utf8')
+    await page.screenshot({ path: resolvePath(dir, 'page.png'), fullPage: true }).catch(() => {})
+    this.log?.warn(`captured the comparison DOM to ${dir} - measure the choose-a-response controls there`)
+    return dir
   }
 
   /**
@@ -1379,6 +1484,9 @@ export class DomProvider extends Provider {
       browsed,
       searched,
       truncated: !!ctx.truncated,
+      // The turn came out of the site's which-answer-do-you-prefer test and
+      // how it was resolved. A label on the answer, not a change to it.
+      ...(ctx.responseComparison ? { response_comparison: ctx.responseComparison } : {}),
       ...(ctx.wireProvenance
         ? { sent_as: ctx.wireProvenance.sentAs, sent_effort: ctx.wireProvenance.sentEffort, wire_continued: true }
         : {}),
@@ -1421,6 +1529,9 @@ export class DomProvider extends Provider {
       extraction: 'wire',
       markdown: true,
       lossy_math: false,
+      // The turn came out of the site's which-answer-do-you-prefer test and
+      // how it was resolved. A label on the answer, not a change to it.
+      ...(ctx.responseComparison ? { response_comparison: ctx.responseComparison } : {}),
       provider_error: integrity.error,
       // A short answer that OPENS like a first-person failure but matches no
       // measured pattern. Not a verdict - see core/answer-integrity.mjs.
