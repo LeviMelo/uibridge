@@ -847,12 +847,16 @@ answer = client.ask("...", model="gemini-pro")
 `threads`, `result`, `status`, `cancel`, plus `health()`, `is_running()` and
 `start()`.
 
-**Timeouts.** uibridge allows a whole request 15 minutes, and the package
-waits a little longer (16), so a slow answer arrives as uibridge's own clear
-`timeout` error rather than as a lost connection. For tasks you expect to take
-longer, raise `requestTimeoutMs` (and the relevant `responseTimeoutMs`) in
-`config.json`, restart uibridge with `uibridge stop`, and pass a matching
-`timeout=` here.
+**Timeouts.** uibridge allows a whole request 15 minutes and one answer 10,
+and the package waits a little longer (16), so a slow answer arrives as
+uibridge's own clear `timeout` error rather than as a lost connection. For a
+question you know is long - a model producing files for half an hour - pass
+`response_timeout=` (seconds) to `ask()`: that one request gets that budget
+for its answer, the whole-request budget grows to match, and the package's
+wait is raised to cover it. The daemon refuses a budget above its
+`maxResponseTimeoutMs` (an hour by default). Raising `requestTimeoutMs` and
+`responseTimeoutMs` in `config.json` moves the defaults for every request
+instead, after `uibridge stop`.
 
 **Everything `ask()` accepts:**
 

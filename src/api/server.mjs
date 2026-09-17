@@ -107,7 +107,12 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
     if (requests.size >= (cfg.maxPendingRequests ?? 64)) throw new BridgeError('The local request queue is full', { status: 503, code: 'queue_full', retryable: true })
     const controller = new AbortController()
     requests.add(controller)
-    const timer = setTimeout(() => controller.abort(new BridgeError('Request exceeded its total time budget', { status: 504, code: 'request_timeout' })), cfg.requestTimeoutMs ?? 900000)
+    // A declared response budget carries the whole-request budget with it:
+    // the answer's time plus the opening, pacing, upload and download around
+    // it (five minutes unless configured), never less than the configured total.
+    const total = Math.max(cfg.requestTimeoutMs ?? 900000,
+      parsed.responseTimeoutMs ? parsed.responseTimeoutMs + (cfg.requestOverheadMs ?? 300000) : 0)
+    const timer = setTimeout(() => controller.abort(new BridgeError('Request exceeded its total time budget', { status: 504, code: 'request_timeout' })), total)
     const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
     try {
       const session = await abortable(sessionFor(parsed.provider), combined)
@@ -299,7 +304,7 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
   }
 
   async function streamCompletion(body, res, { signal, key }) {
-    const { prompt, files, modes, threadId, requested, provider, model, format, includeUsage, unsupported } = parseCompletionRequest(body, cfg)
+    const { prompt, files, modes, threadId, requested, provider, model, format, includeUsage, unsupported, responseTimeoutMs } = parseCompletionRequest(body, cfg)
 
     let opened = false
     let sent = ''
@@ -343,7 +348,7 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
         full = await routes['POST /v1/chat/completions'](body, { signal, key })
         created = full.created
       } else {
-        const result = await infer({ prompt, files, model, modes, threadId, requested, provider, format }, signal,
+        const result = await infer({ prompt, files, model, modes, threadId, requested, provider, format, responseTimeoutMs }, signal,
           format.structured ? null : progress)
         full = completionResponse({ modelId: requested, result, provider, unsupported })
       }

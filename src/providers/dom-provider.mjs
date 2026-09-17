@@ -1121,7 +1121,9 @@ export class DomProvider extends Provider {
    */
   async awaitCompletion(page, ctx) {
     const s = this.sel
-    const cfg = this.settings
+    // The request's own response budget when it declared one (a long,
+    // file-producing turn), the provider's otherwise.
+    const cfg = { ...this.settings, responseTimeoutMs: ctx.responseTimeoutMs ?? this.settings.responseTimeoutMs }
 
     if (ctx.wire && (await this.#awaitWire(ctx))) return ctx
 
@@ -1213,7 +1215,7 @@ export class DomProvider extends Provider {
    * here, because then no message was generated for anyone to read.
    */
   async #awaitWire(ctx) {
-    const cfg = this.settings
+    const cfg = { ...this.settings, responseTimeoutMs: ctx.responseTimeoutMs ?? this.settings.responseTimeoutMs }
     let lastProgress = ''
     const res = await ctx.wire.finished(cfg.responseTimeoutMs, (partial) => {
       if (!ctx.onProgress || !partial?.body) return

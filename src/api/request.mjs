@@ -73,6 +73,7 @@ export function parseCompletionRequest(body, cfg) {
   }
   const modes = readModes(body)
   const threadId = readThreadId(body)
+  const responseTimeoutMs = readResponseTimeout(body, cfg)
   const requested = body.model
   const { provider, model, matched } = resolveModel(requested, cfg.defaultProvider)
   if (!matched) throw new RequestError(`Unknown model "${requested}". Available: ${modelCatalogue().map((m) => m.id).join(', ')}`)
@@ -81,9 +82,33 @@ export function parseCompletionRequest(body, cfg) {
   }
   const format = responseFormat(body.response_format)
   if (format.instruction) prompt += `\n\n[output format]\n${format.instruction}`
-  return { prompt, files, modes, threadId, requested, provider, model, format,
+  return { prompt, files, modes, threadId, requested, provider, model, format, responseTimeoutMs,
     unsupported: ignored,
     includeUsage: body.stream_options?.include_usage === true }
+}
+
+// How long THIS answer may take. The daemon's `responseTimeoutMs` is the
+// budget for one answer and it is provider-wide, so a caller whose turn is
+// known to be long - a drafting model that works for half an hour producing
+// six files from a fifty-file bundle, showing one paragraph of text the whole
+// time - got that paragraph back as `truncated` after ten minutes, with no
+// files (2026-09-14 and 2026-09-17, the same way each time). The caller is
+// the one who knows; it declares the budget here and the daemon waits that
+// long. The ceiling is `maxResponseTimeoutMs` (one hour unless configured):
+// a budget above it is refused, not clipped, because a caller told "yes"
+// and given less would plan on time it does not have. Not part of the
+// idempotency fingerprint - how long a caller waits is not what it asked.
+export function readResponseTimeout(body, cfg) {
+  const value = body._uibridge?.response_timeout_ms
+  if (value == null) return null
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new RequestError('_uibridge.response_timeout_ms must be a positive integer of milliseconds')
+  }
+  const ceiling = cfg?.maxResponseTimeoutMs ?? 3600000
+  if (value > ceiling) {
+    throw new RequestError(`_uibridge.response_timeout_ms ${value} exceeds the configured ceiling maxResponseTimeoutMs=${ceiling}`)
+  }
+  return value
 }
 
 function responseFormat(format) {

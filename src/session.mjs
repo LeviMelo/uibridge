@@ -170,7 +170,7 @@ export class Session {
     return withCancellation(signal, () => this.#ask(options))
   }
 
-  async #ask({ prompt, files = [], model = null, modes = {}, onProgress = null, threadId = null }) {
+  async #ask({ prompt, files = [], model = null, modes = {}, onProgress = null, threadId = null, responseTimeoutMs = null }) {
     checkCancelled()
     if (!prompt || !prompt.trim()) throw new RequestError('prompt is empty')
 
@@ -210,7 +210,7 @@ export class Session {
     // fresh tab, because withTab discards a failed one.
     const RETRYABLE = new Set(['compose_failed', 'submit_failed'])
     try { return await this.#inThread(threadId, () => retry(
-      () => this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started, input }),
+      () => this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started, input, responseTimeoutMs }),
       {
         attempts: 2,
         isRetryable: (e) => RETRYABLE.has(e.code),
@@ -221,7 +221,7 @@ export class Session {
     }
   }
 
-  async #attempt({ prompt, files, model, modes, onProgress, threadId, rid, log, started, input }) {
+  async #attempt({ prompt, files, model, modes, onProgress, threadId, rid, log, started, input, responseTimeoutMs = null }) {
     const resolved = files
     // Pace BEFORE taking a tab, so a queued request holds nothing while it
     // waits and the spacing applies across the whole provider.
@@ -408,6 +408,8 @@ export class Session {
         lastResponseBefore: await provider.lastResponseText(page).catch(() => null),
         threadIdsBefore: await provider.threadIds(page).catch(() => []),
         onProgress,
+        // the caller's own budget for this answer, or null for the provider's
+        responseTimeoutMs,
       }
       phase('baseline')
       checkCancelled()

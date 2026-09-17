@@ -459,7 +459,8 @@ class Client:
 
     def ask(self, prompt: str, model: str, *, thread: str | None = None, files=None,
             thinking: bool | None = None, schema: dict | None = None, json: bool = False,
-            key: str | None = None, timeout: float | None = None) -> Answer:
+            key: str | None = None, timeout: float | None = None,
+            response_timeout: float | None = None) -> Answer:
         """Send one message and return the answer.
 
         prompt    what to say.
@@ -477,6 +478,13 @@ class Client:
                   sending the same request again never posts a second message:
                   it returns the saved answer. See docs/PYTHON.md.
         timeout   seconds to wait, if not the client's default.
+        response_timeout
+                  seconds THIS answer may take on the site, when you know it is
+                  long (a model producing files for half an hour). Without it
+                  the daemon's own budget applies (10 minutes by default) and a
+                  longer turn comes back truncated. Refused above the daemon's
+                  maxResponseTimeoutMs (an hour by default). The wait here is
+                  raised to cover it unless you pass timeout= yourself.
         """
         if not isinstance(prompt, str) or not prompt.strip():
             raise InvalidRequest("prompt must be a non-empty string", code="invalid_request")
@@ -501,6 +509,14 @@ class Client:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema}}
         elif json:
             body["response_format"] = {"type": "json_object"}
+        if response_timeout is not None:
+            if not (isinstance(response_timeout, (int, float)) and response_timeout > 0):
+                raise InvalidRequest("response_timeout must be a positive number of seconds",
+                                     code="invalid_request")
+            body["_uibridge"] = {"response_timeout_ms": int(response_timeout * 1000)}
+            if timeout is None:
+                # the answer's budget plus the daemon's overhead around it, plus a minute
+                timeout = max(self.timeout, response_timeout + 360)
 
         headers = {"Idempotency-Key": key} if key else None
         response = self._request("POST", "/v1/chat/completions", body, headers=headers,

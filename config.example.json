@@ -46,6 +46,10 @@
   "maxPendingRequests": 64,
   "requestTimeoutMs": 900000,
   "_requestTimeoutMs": "Whole-request budget at the API layer, above the per-phase timeouts below.",
+  "maxResponseTimeoutMs": 3600000,
+  "_maxResponseTimeoutMs": "The most a request may declare for its own answer via _uibridge.response_timeout_ms; more is refused, not clipped.",
+  "requestOverheadMs": 300000,
+  "_requestOverheadMs": "Added to a declared response budget to make that request's whole-request budget.",
 
   "provider": {
     "_": "Applies to every provider. The per-provider blocks below override it.",

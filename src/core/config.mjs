@@ -67,6 +67,11 @@ const DEFAULTS = {
   requestDir: '.uibridge/requests',
   maxPendingRequests: 64,
   requestTimeoutMs: 900000,
+  // The most a request may declare for its own answer
+  // (`_uibridge.response_timeout_ms`); above it the request is refused.
+  maxResponseTimeoutMs: 3600000,
+  // Added to a declared response budget for the whole-request budget.
+  requestOverheadMs: 300000,
   // HEADLESS BY DEFAULT. This runs as a background service for other
   // programs on the machine; a chat window flashing open on every call is
   // not something a caller asked for. Signing in is the exception - that is

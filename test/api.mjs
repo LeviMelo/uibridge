@@ -172,3 +172,16 @@ test('close waits for a pending session and closes it without dispatching infere
   assert.equal(closed, 1)
   assert.equal(asked, 0)
 })
+
+test('a request may declare its own response budget, within the configured ceiling', async (t) => {
+  const seen = []
+  const post = await appFor(t, async (parsed) => { seen.push(parsed.responseTimeoutMs); return result() })
+  assert.equal((await post({ ...request, _uibridge: { response_timeout_ms: 2700000 } })).status, 200)
+  assert.equal((await post(request)).status, 200)
+  assert.deepEqual(seen, [2700000, null], 'the budget reaches the session, and its absence is null')
+  for (const bad of [0, -1, 1.5, '2700000', 3600001]) {
+    const res = await post({ ...request, _uibridge: { response_timeout_ms: bad } })
+    assert.equal(res.status, 400, `refused: ${JSON.stringify(bad)}`)
+  }
+  assert.equal(seen.length, 2, 'a refused budget never reaches the session')
+})
