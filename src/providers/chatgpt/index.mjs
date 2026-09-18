@@ -35,6 +35,11 @@ import { captureDownload, parseSchemeLinks, previewProgressed } from '../../tran
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
+// the account's attachment allowance as last read, and the tabs read from (see
+// ChatGPTProvider.allowance)
+let allowanceSeen = null
+const watchedPages = new WeakSet()
+
 export default class ChatGPTProvider extends DomProvider {
   static id = 'chatgpt'
   static selectors = JSON.parse(readFileSync(resolve(HERE, 'selectors.json'), 'utf8'))
@@ -58,7 +63,72 @@ export default class ChatGPTProvider extends DomProvider {
     return { ...super.capabilities(), calibrated: !!this.sel.calibrated }
   }
 
+  // --- the account's attachment allowance ------------------------------------
+  //
+  // MEASURED 2026-09-18. The plan allows a number of attachments per window
+  // (80 on this Plus account, about three hours from the first one). Once it
+  // is used up the page still takes a file into input#upload-files and then
+  // does nothing with it: no upload starts, the composer shows no chip, and
+  // the "add photos and files" item of the + menu is disabled. A file added
+  // from the library is refused the same way (the send button stays
+  // disabled), so it is the attachment that counts, not the upload. Before
+  // this, each such request spent its whole upload budget (180 s) and failed
+  // as `upload_not_registered` or a timeout, which reads as a transport fault
+  // and was re-asked straight back into the same wall.
+  //
+  // The page's own startup call says so in advance: GET
+  // /backend-api/conversation/init carries `blocked_features` (name
+  // "file_upload", `resets_after`, `limit`, a pt-BR `description`) and
+  // `limits_progress` (feature_name "file_upload", `remaining`,
+  // `reset_after`). That response is read off the wire as the page receives
+  // it - nothing is requested - and a request with files is refused at once,
+  // typed, with the reset time, while the reading stands.
+  //
+  // The reading is the ACCOUNT's, so it lives at module level: the session
+  // builds a fresh provider instance for every request, and a reading kept on
+  // the instance would be gone before the next request - or /health - looked.
+
+  /** The last reading of the attachment allowance, or null before one. */
+  allowance() {
+    if (!allowanceSeen) return null
+    const a = allowanceSeen
+    const reset = a.resets_after ? Date.parse(a.resets_after) : NaN
+    // a block whose reset time has passed is over, whatever was last seen
+    const blocked = a.blocked && !(Number.isFinite(reset) && Date.now() >= reset)
+    return { ...a, blocked }
+  }
+
+  #watchAllowance(page) {
+    if (watchedPages.has(page)) return
+    watchedPages.add(page)
+    page.on('response', async (res) => {
+      if (!/\/backend-api\/conversation\/init(\?|$)/.test(res.url())) return
+      try {
+        const reading = readAllowance(await res.json())
+        if (reading) allowanceSeen = reading
+      } catch {}
+    })
+  }
+
+  async attach(page, files) {
+    const a = this.allowance()
+    if (a?.blocked) {
+      throw new BridgeError(
+        `${this.id}: the account's attachment allowance is used up (${a.limit ?? '?'} per window); ` +
+          `it resets at ${a.resets_after}. Nothing was sent.`,
+        {
+          status: 429,
+          code: 'attachment_limit',
+          retryable: true,
+          detail: { limit: a.limit, remaining: a.remaining, resets_after: a.resets_after, seen_at: a.seen_at, files: files.length },
+        }
+      )
+    }
+    return super.attach(page, files)
+  }
+
   async open(page) {
+    this.#watchAllowance(page)
     if (!this.sel.calibrated) {
       throw new BridgeError(
         'The chatgpt provider is not calibrated: its selectors have not been read from the ' +
@@ -174,9 +244,23 @@ export default class ChatGPTProvider extends DomProvider {
     const pop = this.#popover(page)
     if (await pop.isVisible().catch(() => false)) return pop
     await this.requireContract(page, 'picker.trigger', p.trigger)
-    await this.clickThrough(page.locator(p.trigger).first(), { timeout: 10000, what: 'the model picker' })
-    await pop.waitFor({ state: 'visible', timeout: 8000 })
-    return pop
+    // THE CLICK CAN LAND AND STILL OPEN NOTHING. Measured 2026-09-18: 2 of 24
+    // requests (and 3 of c12's on 09-18 at the old pacer) failed with the
+    // popover never appearing, each while the site's rate notice was being
+    // re-raised - its backdrop takes the click after clickThrough dismissed
+    // it. Nothing has been typed or sent at this point, so opening the picker
+    // again is safe; three tries, then the failure is the page's.
+    for (let attempt = 1; ; attempt++) {
+      await this.clickThrough(page.locator(p.trigger).first(), { timeout: 10000, what: 'the model picker' })
+      try {
+        await pop.waitFor({ state: 'visible', timeout: 8000 })
+        return pop
+      } catch (err) {
+        if (attempt >= 3) throw err
+        this.log?.warn(`the model picker did not open (attempt ${attempt}/3); opening it again`)
+        await page.keyboard.press('Escape').catch(() => {})
+      }
+    }
   }
 
   /** What the popover says right now: { effort, effortLabel, family }. */
@@ -287,5 +371,24 @@ export default class ChatGPTProvider extends DomProvider {
       // a string must match the request's thinking_effort exactly.
       expected_effort: spec.sentEffort === undefined ? undefined : spec.sentEffort,
     }
+  }
+}
+
+
+/**
+ * The `file_upload` allowance in a conversation/init body: blocked or not,
+ * what remains, the limit and when it resets. null when the body says
+ * nothing about it.
+ */
+export function readAllowance(body) {
+  const block = (body?.blocked_features ?? []).find((b) => b?.name === 'file_upload')
+  const progress = (body?.limits_progress ?? []).find((p) => p?.feature_name === 'file_upload')
+  if (!block && !progress) return null
+  return {
+    blocked: !!block,
+    remaining: typeof progress?.remaining === 'number' ? progress.remaining : null,
+    limit: typeof block?.limit === 'number' ? block.limit : null,
+    resets_after: block?.resets_after ?? progress?.reset_after ?? null,
+    seen_at: new Date().toISOString(),
   }
 }

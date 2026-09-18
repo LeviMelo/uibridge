@@ -116,6 +116,12 @@ export class Session {
     return this.#pool.stats
   }
 
+  /** What the provider last read of the account's allowances, if it reads any. */
+  get limits() {
+    const a = this.#provider.allowance?.()
+    return a ? { attachments: a } : null
+  }
+
   /**
    * The session verdict WITH its evidence.
    *

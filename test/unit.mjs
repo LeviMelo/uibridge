@@ -2036,3 +2036,68 @@ test('the which-answer-do-you-prefer test is recognised only by wording that was
   // the control instead of relying on the reload
   assert.ok(sel._comparison.some((l) => l.includes('NOT MEASURED')), 'say what was not measured')
 })
+
+// --- ChatGPT's attachment allowance (2026-09-18) --------------------------------
+
+const INIT_BLOCKED = {
+  // the shape the page received, 2026-09-18 05:43Z, trimmed
+  blocked_features: [{ name: 'file_upload', resets_after: '2999-01-01T06:07:00.879429+00:00', limit: 80.0,
+    description: 'Você atingiu o limite de anexos por enquanto.' }],
+  limits_progress: [{ feature_name: 'deep_research', remaining: 25 },
+    { feature_name: 'file_upload', remaining: -1, reset_after: '2999-01-01T06:07:00.877714+00:00' }],
+}
+
+test('the attachment allowance is read from conversation/init as the page received it', async () => {
+  const { readAllowance } = await import('../src/providers/chatgpt/index.mjs')
+  const a = readAllowance(INIT_BLOCKED)
+  assert.equal(a.blocked, true)
+  assert.equal(a.remaining, -1)
+  assert.equal(a.limit, 80)
+  assert.equal(a.resets_after, '2999-01-01T06:07:00.879429+00:00')
+  const open = readAllowance({ limits_progress: [{ feature_name: 'file_upload', remaining: 42, reset_after: 'x' }] })
+  assert.deepEqual([open.blocked, open.remaining], [false, 42])
+  assert.equal(readAllowance({ limits_progress: [{ feature_name: 'image_gen', remaining: 1 }] }), null)
+})
+
+async function chatgptSeeing(body) {
+  const { default: ChatGPTProvider } = await import('../src/providers/chatgpt/index.mjs')
+  const provider = new ChatGPTProvider({ selectors: ChatGPTProvider.selectors, settings: { pollMs: 10 }, log: null })
+  const handlers = []
+  const page = { on: (event, fn) => { if (event === 'response') handlers.push(fn) } }
+  await provider.open(page).catch(() => {}) // the fake page cannot be opened; the watch is armed first
+  for (const fn of handlers) {
+    await fn({ url: () => 'https://chatgpt.com/backend-api/conversation/init', json: async () => body })
+  }
+  return { provider, page }
+}
+
+test('a request with files is refused at once, typed, while the allowance is used up', async () => {
+  const { provider, page } = await chatgptSeeing(INIT_BLOCKED)
+  assert.equal(provider.allowance().blocked, true)
+  await assert.rejects(provider.attach(page, ['a.pdf', 'b.pdf']), (err) => {
+    assert.equal(err.code, 'attachment_limit')
+    assert.equal(err.status, 429)
+    assert.equal(err.retryable, true, 'nothing was sent, so the same request may go again later')
+    assert.equal(err.detail.resets_after, '2999-01-01T06:07:00.879429+00:00')
+    assert.equal(err.detail.files, 2)
+    return true
+  })
+})
+
+test('a block whose reset time has passed is over', async () => {
+  const past = JSON.parse(JSON.stringify(INIT_BLOCKED).replaceAll('2999-01-01', '2000-01-01'))
+  const { provider } = await chatgptSeeing(past)
+  assert.equal(provider.allowance().blocked, false)
+})
+
+test('the reading is the account one: a later request provider instance sees it', async () => {
+  // the session builds a fresh provider for every request (session.mjs)
+  const { default: ChatGPTProvider } = await import('../src/providers/chatgpt/index.mjs')
+  await chatgptSeeing(INIT_BLOCKED)
+  const next = new ChatGPTProvider({ selectors: ChatGPTProvider.selectors, settings: { pollMs: 10 }, log: null })
+  assert.equal(next.allowance().blocked, true)
+  await assert.rejects(next.attach({}, ['a.pdf']), (err) => err.code === 'attachment_limit')
+  const open = { limits_progress: [{ feature_name: 'file_upload', remaining: 80, reset_after: 'x' }] }
+  await chatgptSeeing(open)
+  assert.equal(next.allowance().blocked, false, 'a later reading replaces the block')
+})

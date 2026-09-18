@@ -358,6 +358,8 @@ test('/health identifies the service, its build and its state directory', async 
   for (const id of h.providers) {
     assert.ok(Number.isInteger(h.capacity[id]) && h.capacity[id] >= 1,
       'each provider\'s configured tabs are published before any session opens')
+    assert.ok(Number.isFinite(h.pacing[id]) && h.pacing[id] >= 0,
+      'and its pacer, the floor between request starts')
   }
 })
 

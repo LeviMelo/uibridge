@@ -18,7 +18,7 @@ import { listThreads, readThreadEvents } from '../core/ledger.mjs'
 import { PROTOCOL_VERSION, SERVICE_ID } from '../core/protocol.mjs'
 import { HOME, VERSION } from '../core/config.mjs'
 import { resolve } from 'node:path'
-import { modelCatalogue, providerIds } from '../providers/registry.mjs'
+import { modelCatalogue, providerClass, providerIds } from '../providers/registry.mjs'
 import {
   completionResponse,
   completionChunk,
@@ -181,6 +181,19 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
       // 1, for the first minute after every daemon start
       capacity: Object.fromEntries(providerIds.map((id) =>
         [id, cfg.providers?.[id]?.concurrency ?? cfg.provider?.concurrency ?? 1])),
+      // the effective floor between request starts per provider, ms: with
+      // the tabs, what sets a client's throughput (a client scheduling its
+      // own work reads both instead of assuming either)
+      // (the precedence of `providerSettings`, read without its path
+      // resolution, so health answers whatever the configuration holds)
+      pacing: Object.fromEntries(providerIds.map((id) =>
+        [id, cfg.providers?.[id]?.minIntervalMs ?? providerClass(id)?.defaults?.minIntervalMs
+          ?? cfg.provider?.minIntervalMs ?? 0])),
+      // the account allowances a provider has read off its own page (ChatGPT's
+      // attachments per window): a client planning attachment-heavy work
+      // reads what remains and when it resets instead of finding out by
+      // failing
+      limits: Object.fromEntries([...sessions].map(([id, s]) => [id, s.limits]).filter(([, v]) => v)),
     }),
 
     'GET /v1/models': async () => modelsResponse(modelCatalogue()),

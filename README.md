@@ -677,6 +677,7 @@ retryable.
 | 409 | `outcome_unknown` | The key has an unfinished record: the provider outcome is genuinely unknown. Inspect the conversation before reusing it. |
 | 409 | `daemon_other_home` | The uibridge holding the port serves a different state directory. |
 | 429 | `rate_limited` | The site answered an actual HTTP 429. `retryable`, after a wait. |
+| 429 | `attachment_limit` | The account's attachment allowance is used up (ChatGPT: 80 per window on a Plus plan, measured 2026-09-18). Read off the page's own `conversation/init`; `detail.resets_after` is when it resets. Nothing was sent. `retryable` after that time; `/health` publishes the last reading under `limits`. |
 | 503 | `notice_blocking` | One of the site's own modals kept covering a control and returning after each dismissal. ChatGPT's "too many requests" notice is one of these: it restricts access to *previous conversations*, not sending, so a retry usually succeeds. |
 | 499 | `request_cancelled` | Cancelled by the caller. |
 | 501 | `not_calibrated` | The provider has no measured contract for what you asked (e.g. thread export). |
