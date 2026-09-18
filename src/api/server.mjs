@@ -176,6 +176,11 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
       default: cfg.defaultProvider,
       requests: { active: requests.size, durable_active: store.active, capacity: cfg.maxPendingRequests ?? 64 },
       sessions: Object.fromEntries([...sessions].map(([id, s]) => [id, s.stats])),
+      // configured tabs per provider, known before a session opens: a client
+      // sizing its parallelism from `sessions` alone sees nothing, and guessed
+      // 1, for the first minute after every daemon start
+      capacity: Object.fromEntries(providerIds.map((id) =>
+        [id, cfg.providers?.[id]?.concurrency ?? cfg.provider?.concurrency ?? 1])),
     }),
 
     'GET /v1/models': async () => modelsResponse(modelCatalogue()),

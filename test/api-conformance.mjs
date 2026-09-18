@@ -355,6 +355,10 @@ test('/health identifies the service, its build and its state directory', async 
   assert.match(h.version, /^\d+\.\d+\.\d+$/)
   assert.equal(h.home, server.home, 'a client can tell WHICH uibridge answered')
   assert.ok(Array.isArray(h.providers))
+  for (const id of h.providers) {
+    assert.ok(Number.isInteger(h.capacity[id]) && h.capacity[id] >= 1,
+      'each provider\'s configured tabs are published before any session opens')
+  }
 })
 
 test('/v1/capabilities describes what this build can actually do', async () => {
