@@ -370,7 +370,10 @@ export function orderedMessages(store, order) {
  *   roleAttr     attribute carrying the author role (optional)
  *   roleMap      { selector: role } when the role is the element itself
  *   modelAttr    attribute carrying the model that wrote it (optional)
- *   textNode     inner node holding the text (optional; else the message)
+ *   textNode     inner node holding the text (optional; a message without
+ *                one is read whole)
+ *   textExclude  nodes inside the text that are not part of it, pruned on a
+ *                clone (optional)
  *   fileControl  selector for a file/download control inside a message
  */
 export async function sweepThread(page, contract, { settleMs = 400, maxTopPasses = 40, maxSteps = 400, log } = {}) {

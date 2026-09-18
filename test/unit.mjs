@@ -1877,6 +1877,121 @@ test('a shorter later reading never truncates the text it already had', async ()
   assert.deepEqual(kept.file_controls, ['Download x.csv'], 'and the new control must still be picked up')
 })
 
+// THE TEXT READING ITSELF, not the accounting: a DOM just large enough to
+// run the export's own reading function (sweepThread's page.evaluate) over
+// the tree measured on 2026-09-18 (docs/UI-RECON.md, "A long user message
+// renders collapsed"). innerText is block layout - each rendered child on its
+// own line, a hidden one not at all - which is what the page measured: the
+// 9,901-character prompt read back as 9,914, the prompt + '\nMostrar mais'.
+const fakeCompound = (el, sel) => {
+  let rest = sel
+  const tag = rest.match(/^[a-z][\w-]*/i)
+  if (tag) {
+    if (el.tag !== tag[0].toLowerCase()) return false
+    rest = rest.slice(tag[0].length)
+  }
+  while (rest) {
+    let m
+    if ((m = rest.match(/^\.([\w-]+)/))) {
+      if (!el.classes.includes(m[1])) return false
+    } else if ((m = rest.match(/^\[([\w-]+)(?:(\^?=)(?:"([^"]*)"|'([^']*)'|([^\]]*)))?\]/))) {
+      const value = el.attrs[m[1]]
+      const want = m[3] ?? m[4] ?? m[5]
+      if (value === undefined) return false
+      if (m[2] === '=' && value !== want) return false
+      if (m[2] === '^=' && !value.startsWith(want)) return false
+    } else {
+      throw new Error(`the fake DOM cannot read the selector ${sel}`)
+    }
+    rest = rest.slice(m[0].length)
+  }
+  return true
+}
+const fakeMatches = (el, selector) => selector.split(',').some((alternative) => {
+  const parts = alternative.trim().split(/\s+/)
+  if (!fakeCompound(el, parts.at(-1))) return false
+  let node = el.parentElement
+  for (let i = parts.length - 2; i >= 0; i--) {
+    while (node && !fakeCompound(node, parts[i])) node = node.parentElement
+    if (!node) return false
+    node = node.parentElement
+  }
+  return true
+})
+class FakeElement {
+  constructor(tag, attrs = {}, children = [], { text = '', hidden = false } = {}) {
+    Object.assign(this, { tag, attrs, children, ownText: text, hidden, parentElement: null })
+    this.classes = (attrs.class || '').split(/\s+/).filter(Boolean)
+    for (const child of children) child.parentElement = this
+  }
+  getAttribute(name) { return this.attrs[name] ?? null }
+  get descendants() { return this.children.flatMap((c) => [c, ...c.descendants]) }
+  querySelectorAll(selector) { return this.descendants.filter((d) => fakeMatches(d, selector)) }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null }
+  matches(selector) { return fakeMatches(this, selector) }
+  closest(selector) {
+    for (let n = this; n; n = n.parentElement) if (fakeMatches(n, selector)) return n
+    return null
+  }
+  get innerText() {
+    if (this.hidden) return ''
+    return [this.ownText, ...this.children.map((c) => c.innerText)].filter(Boolean).join('\n')
+  }
+  get textContent() { return [this.ownText, ...this.children.map((c) => c.textContent)].join('') }
+}
+const fakeEl = (tag, attrs, children, options) => new FakeElement(tag, attrs, children, options)
+const pageOver = (roots) => {
+  const all = () => roots.flatMap((r) => [r, ...r.descendants])
+  const document = {
+    scrollingElement: { scrollTop: 0, scrollHeight: 600, clientHeight: 600 },
+    querySelectorAll: (selector) => all().filter((d) => fakeMatches(d, selector)),
+    contains: () => true,
+  }
+  const browserGlobals = { document, window: {}, getComputedStyle: () => ({ overflowY: 'visible' }) }
+  return {
+    evaluate: async (fn, arg) => {
+      Object.assign(globalThis, browserGlobals)
+      try { return fn(arg) } finally { for (const name in browserGlobals) delete globalThis[name] }
+    },
+  }
+}
+
+test('a long ChatGPT user turn exports as the exact prompt, never with its "show more" label', async () => {
+  const contract = JSON.parse(readFileSync(new URL('../src/providers/chatgpt/selectors.json', import.meta.url), 'utf8')).thread.export
+  const prompt = ['reply with the single word OK', '',
+    ...Array.from({ length: 300 }, (_, i) => `filler ${i}: "tab\there", a < b & c`)].join('\n')
+  const turn = (n, message) => fakeEl('article', { 'data-testid': `conversation-turn-${n}` }, [message])
+  const said = (id, role, children) => fakeEl('div', { 'data-message-author-role': role, 'data-message-id': id }, children)
+  const bubble = (text) => fakeEl('div', { class: 'whitespace-pre-wrap' }, [], { text })
+  const answer = (text) => fakeEl('div', { class: 'markdown prose' }, [fakeEl('p', {}, [], { text })])
+  // The measured collapsed bubble: the text and the toggle are siblings, and
+  // the toggle carries both labels, one of them hidden.
+  const collapsed = said('u2', 'user', [
+    fakeEl('div', { 'data-testid': 'collapsible-user-message-root', 'data-collapsed': '', 'data-can-expand': '' }, [
+      fakeEl('div', { id: '_r_8p_', 'data-testid': 'collapsible-user-message-content' }, [bubble(prompt)]),
+      fakeEl('button', { type: 'button', 'aria-controls': '_r_8p_', 'aria-expanded': 'false',
+        'data-testid': 'collapsible-user-message-toggle' }, [
+        fakeEl('span', { class: 'A_HxFq_showMoreLabel' }, [], { text: 'Mostrar mais' }),
+        fakeEl('span', { class: 'A_HxFq_showLessLabel' }, [], { text: 'Mostrar menos', hidden: true }),
+      ]),
+    ]),
+  ])
+  assert.equal(collapsed.innerText, `${prompt}\nMostrar mais`, 'the fake reproduces what the page measured')
+  const r = await sweepThread(pageOver([
+    turn(1, said('u1', 'user', [bubble('Diagnostic message: reply with the single word OK.')])),
+    turn(2, said('a1', 'assistant', [answer('OK')])),
+    turn(3, collapsed),
+    turn(4, said('a2', 'assistant', [answer('OK')])),
+  ]), contract, { settleMs: 1 })
+  assert.deepEqual(r.messages.map((m) => [m.role, m.text]), [
+    ['user', 'Diagnostic message: reply with the single word OK.'],
+    ['assistant', 'OK'],
+    ['user', prompt],
+    ['assistant', 'OK'],
+  ])
+  assert.equal(r.complete, true)
+})
+
 
 import { downloadFromPreview } from '../src/transports/dom.mjs'
 

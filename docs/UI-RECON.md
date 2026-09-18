@@ -240,6 +240,29 @@ wrapped by `[data-testid="conversation-turn-N"]`. Model provenance is readable
 per assistant message. Numbering is **per message, not per pair**: six messages
 are turns 1–6.
 
+**A long user message renders collapsed (measured 2026-09-18).** Thread
+`6aad803b-…`, whose second user turn was 333 lines and 9,901 characters, was
+exported as the prompt followed by `\nMostrar mais` (9,914 characters). The
+page, read in its own tab:
+
+    [data-message-author-role="user"][data-message-id]
+      … div.user-message-bubble-color
+          div[data-testid="collapsible-user-message-root"][data-collapsed][data-can-expand]
+            div#_r_8p_[data-testid="collapsible-user-message-content"]   innerText 9,901
+              div.whitespace-pre-wrap                                     innerText 9,901
+            button[data-testid="collapsible-user-message-toggle"]
+                  [aria-controls="_r_8p_"][aria-expanded="false"]         innerText 12
+              span.…showMoreLabel   "Mostrar mais"
+              span.…showLessLabel   "Mostrar menos"   (not rendered while collapsed)
+
+The toggle is a **sibling** of the text, and the collapse is CSS: the content
+node's `innerText` is the whole prompt while collapsed, so nothing has to be
+clicked open on the user's page. `thread.export.textNode` is that content node.
+A short user turn has no collapsible root (its bubble holds the
+`whitespace-pre-wrap` div directly) and no assistant turn has one, so both still
+read the whole message. `test/unit.mjs` runs the export's own reading function
+over this tree.
+
 ## The thread does not fully load — the important finding
 
 Reloading a six-message thread and sampling the DOM every 150ms:
@@ -481,6 +504,7 @@ file - the card route produced it too - not an artefact of either route.
 | Gemini model labels now version-prefixed (`3.1 Pro`) | Existing regexes verified live, still correct |
 | `export --files` could not retrieve a file from a reloaded thread | **Fixed** — the message link only opens the preview panel there; the panel's own control downloads, and the bytes arrive as a browser download, not on the wire |
 | The file card under every generated file | **Found by the user**, measured, now the first route on a reloaded thread - one hover and one click, found by name, language-independent |
+| A long ChatGPT user turn exported with its collapse label (`\nMostrar mais`) appended | **Fixed** (2026-09-18) — `textNode` reads the collapsible content node, which holds the whole text while collapsed |
 
 Confirmed correct by independent measurement, having been taken on trust
 before: Gemini has no file input (`cdp-drag`); the `You said` duplication and
