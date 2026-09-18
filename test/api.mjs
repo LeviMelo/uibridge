@@ -55,6 +55,30 @@ test('composer replaces stale input and refuses partial long prompts', async () 
   await assert.rejects(fillComposer(composer, long), { code: 'compose_failed' })
 })
 
+test('a ProseMirror composer takes the prompt as paragraphs, checked, and fill() is the fallback', async () => {
+  // a stand-in element: evaluate(fn, arg) runs fn against it, as Playwright does
+  globalThis.InputEvent ??= class { constructor (type) { this.type = type } }
+  const el = {
+    isContentEditable: true, classList: { contains: (c) => c === 'ProseMirror' },
+    focus() {}, dispatchEvent() {}, innerHTML: '',
+    get childNodes() { return [] },
+    get innerText() {
+      return this.innerHTML.split('</p>').filter(Boolean).map((p) => p.replace(/^<p>/, '')
+        .replace(/^<br>$/, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')).join('\n')
+    },
+  }
+  let filled = 0
+  const composer = { evaluate: async (fn, arg) => fn(el, arg), fill: async () => { filled++ } }
+  const prompt = 'Evidence α <b> & c\n\n  {"k":  1}\n'.repeat(500) + 'TAIL'
+  await fillComposer(composer, prompt)
+  assert.equal(filled, 0, 'no typing through the editor')
+  assert.equal(el.innerText, prompt)
+  // an editor that does not hold what was written falls back to fill()
+  const lossy = { ...composer, evaluate: async (fn, arg) => (arg === undefined ? 'lost' : fn(el, arg)) }
+  await assert.rejects(fillComposer(lossy, prompt), { code: 'compose_failed' })
+  assert.equal(filled, 1)
+})
+
 test('provider failures and empty answers cannot masquerade as successful inference', async (t) => {
   for (const value of [result(''), { ...result('Sorry'), provider_error: true }]) {
     const post = await appFor(t, async () => value)

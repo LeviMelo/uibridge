@@ -212,6 +212,25 @@ Unlike Gemini, ChatGPT **does** have file inputs — five, including one general
 `multiple` input and `upload-media-input` / `upload-photos-input` restricted to
 `image/*` and `image/*,video/*`.
 
+**Placing a long prompt (measured 2026-09-18).** Playwright's `fill()` goes
+through the editor at about 0.1 s per *line*, whatever the line's length:
+
+| prompt | `fill()` |
+|---|---|
+| 2 KB in 24 lines | 1.9 s |
+| 8 KB in 93 lines | 8.7 s |
+| 28 KB in 330 lines | 35 s (quiet tab); over 120 s with the browser busy |
+| 28 KB in 1 line | 0.1 s |
+
+`document.execCommand('insertText')` is no faster (40 s for the 330 lines). A
+synthetic `paste` is turned into a file attachment by the site, not text.
+Writing the lines as the editor's own `<p>` nodes (`<p><br></p>` for a blank
+line) and dispatching `input` placed 342 lines in 0.6 s. The editor keeps them:
+a key typed afterwards appends to them. A prompt sent that way was in the
+transcript exactly, read back after a reload: indentation, repeated spaces,
+`<` and `&`, blank lines, tabs. `fillComposer` does this for a ProseMirror
+composer, reads the composer back, and falls back to `fill()`.
+
 ## Messages
 
     [data-message-id="<uuid>"][data-message-author-role="user|assistant"]
