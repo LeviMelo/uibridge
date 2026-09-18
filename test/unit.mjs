@@ -2070,16 +2070,16 @@ test('a long ChatGPT user turn exports as the exact prompt, never with its "show
 import { downloadFromPreview } from '../src/transports/dom.mjs'
 
 // A stand-in for the one shape downloadFromPreview reads: a panel locator that
-// reports visibility and answers getByLabel. `context()` stands in for the
-// browser-download capture, so reaching it IS the assertion that the control
-// was found - capturing real bytes needs a browser and belongs in the live
-// suite.
+// reports visibility and answers getByRole by accessible name (an aria-label
+// or the button's text). `context()` stands in for the browser-download
+// capture, so reaching it IS the assertion that the control was found -
+// capturing real bytes needs a browser and belongs in the live suite.
 function previewPage({ visible = true, labelled = [] } = {}) {
   const miss = { count: async () => 0, click: async () => {} }
   const hit = { count: async () => 1, click: async () => {} }
   const panel = {
     isVisible: async () => visible,
-    getByLabel: (re) => ({ first: () => (labelled.some((l) => re.test(l)) ? hit : miss) }),
+    getByRole: (role, { name }) => ({ first: () => (role === 'button' && labelled.some((l) => name.test(l)) ? hit : miss) }),
     locator: () => ({ first: () => ({ click: async () => {} }) }),
   }
   return {
@@ -2099,6 +2099,11 @@ test('an open preview panel with no matching download control reports a miss, no
   // The neighbouring button is fullscreen and carries the identical classes,
   // so falling back to "the first icon button" would silently click that.
   const page = previewPage({ visible: true, labelled: ['Tela cheia', 'Fechar'] })
+  assert.equal(await downloadFromPreview(page, { previewPanel: '#p', previewDownload: 'Baixar|Download' }, { dir: 'x' }), null)
+})
+
+test('the panel\'s download control is its whole name, never a longer one that contains it', async () => {
+  const page = previewPage({ visible: true, labelled: ['Baixar tudo', 'Tela cheia'] })
   assert.equal(await downloadFromPreview(page, { previewPanel: '#p', previewDownload: 'Baixar|Download' }, { dir: 'x' }), null)
 })
 
@@ -2169,6 +2174,77 @@ test('the card route declines without a measured card, and never touches the pag
   const page = { locator: () => { throw new Error('must not touch the page without a measured card') } }
   assert.equal(await downloadFromCard(page, { previewPanel: '#p' }, { name: 'x.csv' }), null)
   assert.equal(await downloadFromCard(page, { card: { file: 'f', download: 'd' } }, {}), null, 'no name, no route')
+})
+
+test('a live file whose link fetched nothing is taken from its card, with the link\'s preview closed first', async () => {
+  // Measured 2026-09-18: a DOCX link on a live turn fetched nothing in three
+  // clicks while the turn's cards stood under it with the plain names.
+  const { fileFromTurn } = await import('../src/transports/file-card.mjs')
+  const calls = []
+  const cards = ['manuscript_en.md', 'manuscript_en.docx', 'manuscript_en.pdf']
+  const turn = { locator: () => ({ evaluateAll: async () => cards }) }
+  const panel = {
+    isVisible: async () => true,
+    locator: (sel) => ({ first: () => ({ click: async () => calls.push(`close ${sel}`) }) }),
+  }
+  const page = {
+    locator: (sel) => sel === '#panel'
+      ? { first: () => panel }
+      : { filter: ({ has }) => { calls.push(`turn ${sel} has ${has.sel}`); return { last: () => turn } }, sel },
+  }
+  const spec = {
+    previewPanel: '#panel', previewClose: '#close',
+    card: { scope: '[data-testid^="conversation-turn-"]', control: 'c', file: 'f', download: 'd' },
+  }
+  const routes = {
+    card: async (_p, _s, { scope, name }) => { calls.push(`card ${name} in ${scope === turn}`); return { name, path: `dl/${name}`, source: 'browser' } },
+    preview: async () => { throw new Error('the card had it; the panel must not be tried') },
+  }
+  const got = await fileFromTurn(page, spec, { responseBlocks: '.answer', link: { label: 'manuscript_en.docx' }, fallbackName: 'manuscript_en.docx' }, routes)
+  assert.deepEqual(got, { name: 'manuscript_en.docx', path: 'dl/manuscript_en.docx', source: 'browser' })
+  assert.deepEqual(calls, [
+    'close #close',
+    'turn [data-testid^="conversation-turn-"] has .answer',
+    'card manuscript_en.docx in true',
+  ])
+
+  // no card by that name: the panel, and nothing is guessed from another card
+  const tried = []
+  const none = await fileFromTurn(page, spec, { responseBlocks: '.answer', link: { label: 'Download it' }, fallbackName: 'other.csv', control: 'ctl' }, {
+    card: async () => { throw new Error('no card names other.csv; none may be clicked') },
+    preview: async (_p, _s, { control }) => { tried.push(control); return null },
+  })
+  assert.equal(none, null, 'neither route had it, so the link\'s own failure stands')
+  assert.deepEqual(tried, ['ctl'])
+})
+
+test('a card folded behind "3 more" is unfolded by the toggle that controls it, then hovered', async () => {
+  // Measured 2026-09-18: a six-file turn shows three cards and folds the
+  // rest into div[hidden] behind button[aria-controls][aria-expanded=false].
+  const steps = []
+  let shown = false
+  const file = {
+    count: async () => 1,
+    isVisible: async () => shown,
+    evaluate: async (_fn, sel) => { steps.push(`find toggle ${sel}`); return '_r_gg_' },
+    waitFor: async () => { if (!shown) throw new Error('still hidden') },
+    hover: async () => { steps.push('hover'); if (!shown) throw new Error('hover on a hidden card') },
+  }
+  const control = { count: async () => 1, click: async () => steps.push('download') }
+  const scope = {
+    locator: (sel) => ({
+      first: () => sel === 'button[aria-controls="_r_gg_"]'
+        ? { click: async () => { steps.push('unfold'); shown = true } }
+        : sel.startsWith('F') ? file : control,
+    }),
+  }
+  const spec = { card: { file: 'F {name}', download: 'D {name}', fold: 'button[aria-controls][aria-expanded="false"]' } }
+  // the browser-download capture needs a browser; reaching it after the
+  // hover is the assertion, so the page's context() stands in for it
+  const page = { context: () => { throw new Error('reached the browser download capture') } }
+  await assert.rejects(downloadFromCard(page, spec, { scope, name: 'manuscript_pt-BR.docx', dir: mkdtempSync(join(tmpdir(), 'uibridge-card-')) }),
+    /reached the browser download capture/)
+  assert.deepEqual(steps, ['find toggle button[aria-controls][aria-expanded="false"]', 'unfold'])
 })
 
 test('a card that is not on the page is a miss, not a click', async () => {

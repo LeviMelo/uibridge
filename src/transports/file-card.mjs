@@ -15,6 +15,7 @@
 
 import { mkdirSync, statSync } from 'node:fs'
 import { captureDownload } from './download.mjs'
+import { downloadFromPreview } from './dom.mjs'
 
 // A value for a double-quoted CSS attribute selector. A file name can hold any
 // character, and a quote or backslash in one must not end the selector early.
@@ -79,6 +80,7 @@ export async function downloadFromCard(page, spec, { scope = page, name, tap = n
   const control = scope.locator(fill(card.download)).first()
   if (!(await control.count().catch(() => 0))) return null
 
+  await unfold(scope, file, card.fold)
   const meta = tap && spec.metadataPattern ? tap.expect(spec.metadataPattern) : null
   try {
     mkdirSync(dir, { recursive: true })
@@ -97,4 +99,71 @@ export async function downloadFromCard(page, spec, { scope = page, name, tap = n
   } finally {
     meta?.stop?.()
   }
+}
+
+/**
+ * Open the fold a card is hidden behind.
+ *
+ * A turn shows its first three cards and folds the rest into `div[hidden]`
+ * behind a toggle ("Mais 3"), measured 2026-09-18 on a six-file turn. The
+ * toggle is found by what it controls, not by its words: `fold` matches a
+ * collapsed toggle, and the one whose `aria-controls` element holds this
+ * card is clicked. A visible card, or no such toggle, is left alone.
+ */
+async function unfold(scope, file, fold) {
+  if (!fold || (await file.isVisible().catch(() => false))) return
+  const id = await file.evaluate((el, sel) => {
+    for (const t of document.querySelectorAll(sel)) {
+      if (document.getElementById(t.getAttribute('aria-controls'))?.contains(el)) return t.getAttribute('aria-controls')
+    }
+    return null
+  }, fold).catch(() => null)
+  if (!id) return
+  await scope.locator(`button[aria-controls="${cssString(id)}"]`).first().click({ timeout: 5000 }).catch(() => {})
+  await file.waitFor({ state: 'visible', timeout: 3000 }).catch(() => {})
+}
+
+/**
+ * A live turn's file whose link fetched nothing: its file card, then the
+ * preview panel - the routes `export --files` takes on a reloaded thread.
+ *
+ * A link can stop fetching on a LIVE turn too. Measured 2026-09-18 on a
+ * ChatGPT manuscript turn, the ninth of a long conversation whose earlier
+ * turns had made files of the same names: both DOCX links issued no request
+ * in three clicks each (the page's last requests were the documents' own
+ * embedded images, a preview rendering), while the turn's six file cards
+ * stood under it with the plain names. `turn` is the last turn holding a
+ * response block. Three clicks on the link can leave its preview open over
+ * the turn, so an open panel is closed first. Returns null when neither
+ * route yields the file, so the caller reports the link's failure.
+ * `routes` is for tests.
+ */
+export async function fileFromTurn(page, spec, {
+  responseBlocks, link = {}, fallbackName, control = null, tap = null, dir = 'downloads', downloadMs = 30000, log,
+} = {}, routes = { card: downloadFromCard, preview: downloadFromPreview }) {
+  const panel = spec?.previewPanel ? page.locator(spec.previewPanel).first() : null
+  if (panel && spec.previewClose && (await panel.isVisible().catch(() => false))) {
+    await panel.locator(spec.previewClose).first().click({ timeout: 4000 }).catch(() => {})
+  }
+  const turn = spec?.card?.scope && responseBlocks
+    ? page.locator(spec.card.scope).filter({ has: page.locator(responseBlocks) }).last()
+    : null
+  const names = turn ? await cardNames(turn, spec) : []
+  const name = cardFor(names, fallbackName) ?? cardFor(names, link.label)
+  const viaCard = name
+    ? await routes.card(page, spec, { scope: turn, name, tap, dir, downloadMs, log }).catch((err) => {
+      log?.debug(`the file card did not yield ${name}: ${err.message.split('\n')[0]}`)
+      return null
+    })
+    : null
+  if (viaCard) {
+    log?.info(`${fallbackName}: its link fetched nothing; taken from its file card`)
+    return viaCard
+  }
+  const viaPreview = await routes.preview(page, spec, { control, dir, downloadMs, log }).catch((err) => {
+    log?.debug(`the preview panel did not yield ${fallbackName} either: ${err.message.split('\n')[0]}`)
+    return null
+  })
+  if (viaPreview) log?.info(`${fallbackName}: its link fetched nothing; taken from the preview panel`)
+  return viaPreview
 }

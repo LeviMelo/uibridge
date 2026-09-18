@@ -361,6 +361,35 @@ file as a download button, not a link.
 - A page-read answer's files are named by the turn's download controls
   (`linksFromControls`).
 
+## A live turn's file link that fetches nothing (measured 2026-09-18)
+
+**The event.** c12's next manuscript turn, the ninth of that conversation,
+whose earlier turns had made files of the same six names, came off the wire
+at 22:21Z with six `sandbox:` links. Four files came down through their links.
+Both DOCX links issued no request in three clicks each. The page's last
+requests were data-URL images and a `files/…/simple`: a preview rendering the
+document, not a download. The request reported both files as errors.
+
+**The turn, read afterwards in the tab:**
+
+| what | measured |
+|---|---|
+| the six links | `button.behavior-btn`, `aria-label` = the file's plain name (`manuscript_en.docx`) |
+| the six cards | `button.group/open-file`, **the same `aria-label`**, then `div > span > button[aria-label="Baixar arquivo"]` |
+| `card.file` as it was, `button[aria-label="{name}"]` | two matches, the link first: the hover went to the link, the card's wrapper stayed `pointer-events:none`, the click timed out at 8 s |
+| `button[aria-label="{name}"]:has(+ div > span > button)` | one match, the card's; hovered, the wrapper turns `pointer-events:auto` and the point at the control's centre is the control |
+| cards 4-6 | in `div[hidden]` (zero box) under `<button aria-controls=… aria-expanded="false">Mais 3</button>`, whose controlled element holds them; hovering one timed out at 5 s |
+| the preview panel the link clicks left open | `artifact-preview-surface-shell` over x 501-1500; close is `button[aria-label="Fechar"]` with no `data-testid`; download is `<button><div>Baixar</div></button>`, no `aria-label` |
+
+**Fixed:** a live file whose link fetches nothing goes to `fileFromTurn`:
+it closes an open panel first, then tries the file card (unfolding it by the
+toggle that controls it), then the panel. These are `export --files`' routes.
+`card.file` carries the `:has`, `card.fold` is the toggle, `previewClose` adds
+the measured label, and the panel's download is matched by accessible name.
+**Proven on that turn:** `manuscript_en.docx` (188,304 bytes, 12.7 s) and the
+folded `manuscript_pt-BR.docx` (189,488 bytes, 17.4 s) came from their cards,
+both valid DOCX with four embedded figures, and the panel closed.
+
 ## Sending while a file uploads — READ FROM THE PAGE'S CODE, NOT YET MEASURED (2026-09-18)
 
 **Source:** the app's own JavaScript as captured on 2026-09-06, in the
@@ -544,6 +573,7 @@ file - the card route produced it too - not an artefact of either route.
 | `export --files` could not retrieve a file from a reloaded thread | **Fixed** — the message link only opens the preview panel there; the panel's own control downloads, and the bytes arrive as a browser download, not on the wire |
 | The file card under every generated file | **Found by the user**, measured, now the first route on a reloaded thread - one hover and one click, found by name, language-independent |
 | A long ChatGPT user turn exported with its collapse label (`\nMostrar mais`) appended | **Fixed** (2026-09-18) — `textNode` reads the collapsible content node, which holds the whole text while collapsed |
+| A live turn's DOCX links fetched nothing; the card route hovered the link (same `aria-label`) and missed folded cards | **Fixed** (2026-09-18) — the live path falls back to the card, then the panel; `card.file` takes `:has(+ div > span > button)`, `card.fold` unfolds "Mais 3" |
 
 Confirmed correct by independent measurement, having been taken on trust
 before: Gemini has no file input (`cdp-drag`); the `You said` duplication and

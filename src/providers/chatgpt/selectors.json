@@ -188,12 +188,13 @@
     "contentPattern": "/backend-api/estuary/content",
     "previewPanel": "[data-testid=\"artifact-preview-surface-shell\"], [data-testid=\"stage-thread-flyout\"]",
     "previewDownload": "Baixar|Download|Descargar|Télécharger|Herunterladen|Scarica",
-    "previewClose": "[data-testid=\"close-button\"]",
+    "previewClose": "[data-testid=\"close-button\"], button[aria-label=\"Fechar\"]",
     "card": {
       "scope": "[data-testid^=\"conversation-turn-\"]",
       "control": "button[aria-label] + div > span > button",
-      "file": "button[aria-label=\"{name}\"]",
-      "download": "button[aria-label=\"{name}\"] + div > span > button"
+      "file": "button[aria-label=\"{name}\"]:has(+ div > span > button)",
+      "download": "button[aria-label=\"{name}\"] + div > span > button",
+      "fold": "button[aria-controls][aria-expanded=\"false\"]"
     }
   },
   "transientText": [
@@ -356,7 +357,30 @@
     "diag_probe(1).csv 24 bytes, both mime text/csv, source browser. A filled",
     "mime is what proves the card did it - the panel route cannot report one.",
     "The '(1)' is the server's own name for that file; the card route produced",
-    "it too."
+    "it too.",
+    "",
+    "`file` NEEDS the `:has(+ div > span > button)`. Measured 2026-09-18 on c12's",
+    "manuscript turn: the message's own link (button.behavior-btn) now carries",
+    "exactly the file's name as its aria-label, the same label as the card's",
+    "file button (button.group/open-file), and it comes first. The bare",
+    "`button[aria-label=name]` hovered the link, the card's wrapper stayed",
+    "pointer-events:none, and the click timed out at 8 s. With the :has, one",
+    "match, the card's button; hovered, the wrapper turns pointer-events:auto",
+    "and the point at the control's centre is the control.",
+    "",
+    "`fold`, measured the same day on that six-file turn: the turn shows three",
+    "cards and folds the other three into div[hidden] (display:none, zero box),",
+    "under one toggle, <button aria-controls=_r_gg_ aria-expanded=false>Mais 3.",
+    "The element it controls holds the hidden cards, so the toggle is found by",
+    "what it controls rather than by its words. Hovering a folded card timed out",
+    "at 5 s.",
+    "",
+    "The preview panel, the same day: its close button was",
+    "button[aria-label=Fechar] with no data-testid, so `previewClose` failed and",
+    "the panel stayed open over the right two thirds of the thread; its download",
+    "control was <button><div>Baixar</div></button>, a text with no aria-label.",
+    "It is matched by accessible name, which covers both measurements. Only the",
+    "pt-BR close label was measured."
   ],
   "_previewDownload": [
     "MEASURED 2026-09-09, and it settles a defect that had been open since",

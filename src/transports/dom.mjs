@@ -208,7 +208,9 @@ export async function downloadFromPreview(page, spec, { control, dir = 'download
   // A bare icon button whose only stable identity is its label, so a miss
   // here is reported as a miss instead of being papered over with a guess at
   // its position in the toolbar - its neighbour is fullscreen, not download.
-  const button = panel.getByLabel(new RegExp(spec.previewDownload, 'i')).first()
+  // Matched by accessible name: an aria-label when measured 2026-09-09, the
+  // button's own text ("Baixar", no aria-label) when measured 2026-09-18.
+  const button = panel.getByRole('button', { name: new RegExp(`^(${spec.previewDownload})$`, 'i') }).first()
   try {
     if (!(await button.count().catch(() => 0))) {
       log?.warn(`the preview panel has no control labelled /${spec.previewDownload}/i`)

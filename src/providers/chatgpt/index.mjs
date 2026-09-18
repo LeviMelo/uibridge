@@ -32,6 +32,7 @@ import { BridgeError } from '../../core/errors.mjs'
 import { waitFor } from '../../core/async.mjs'
 import { WireTap } from '../../transports/wire.mjs'
 import { captureDownload, linksFromControls, parseSchemeLinks, previewProgressed } from '../../transports/files-wire.mjs'
+import { fileFromTurn } from '../../transports/file-card.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -232,6 +233,11 @@ export default class ChatGPTProvider extends DomProvider {
           })
         )
       } catch (e) {
+        const other = await this.#fileByOtherRoutes(page, g, { link, fallbackName, control, tap })
+        if (other) {
+          out.push(other)
+          continue
+        }
         // Name what the page DID request. "Nothing matched" is not a
         // diagnosis, and guessing from it is how two runs got blamed on the
         // wrong component.
@@ -243,6 +249,14 @@ export default class ChatGPTProvider extends DomProvider {
       }
     }
     return out
+  }
+
+  /** A file whose link fetched nothing: its card, then the panel (fileFromTurn). */
+  #fileByOtherRoutes(page, g, { link, fallbackName, control, tap }) {
+    return fileFromTurn(page, g, {
+      responseBlocks: this.sel.responseBlocks, link, fallbackName, control, tap,
+      dir: this.settings.downloadDir, downloadMs: this.settings.fileWaitMs, log: this.log,
+    })
   }
 
   // --- the picker ----------------------------------------------------------
