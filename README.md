@@ -532,6 +532,7 @@ The complete set, from a real response:
 | field | why it exists |
 |---|---|
 | `provider`, `request_id`, `elapsed_ms` | Which provider answered, the id this run is logged under, and how long it took end to end. |
+| `transport_timing` | Observed UTC timestamps for `submit`, `turn_appeared`, `first_token`, and `finish` when the provider exposes each event. Missing events are omitted rather than inferred. |
 | `input.characters`, `input.sha256`, `input.transport` | Exactly what was sent, hashed, and *how*: `composer` (typed) or `attachment` (too large to type, so carried as a temporary UTF-8 file). A prompt that took the attachment path is a different experiment from one that did not. |
 | `ledger.path` | Local JSONL audit file for this native thread. |
 | `provenance.model.requested` / `.note` | What you asked for, and why the verdict is what it is (`already active`, `unknown model`, ...). |

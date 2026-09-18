@@ -119,9 +119,15 @@ const DEFAULTS = {
     responseTimeoutMs: 600000,
     // Ten PDFs in one prompt go through the app's own upload pipeline one
     // by one; on a slow link that is more than three minutes (2026-09-17:
-    // eight of ten such batches timed out at 180 s). The budget covers the
-    // whole batch, so it is a response-sized budget, not a network one.
+    // eight of ten such batches timed out at 180 s). The wait is per file:
+    // `uploadPerFileMs` each, at least `uploadFloorMs` (small batches always
+    // fit in 180 s), at most `uploadTimeoutMs`. One file waits 180 s, ten
+    // wait 600 s. A single-file wait of 600 s only prolonged stalls: 31 of
+    // 1,205 requests died on a process_upload_stream that never finished,
+    // and the retry of the one on 2026-09-17 answered in 108 s.
     uploadTimeoutMs: 600000,
+    uploadPerFileMs: 60000,
+    uploadFloorMs: 180000,
     fileWaitMs: 20000,
     pollMs: 150,
     // Consecutive identical reads that mean "finished". A measurement of

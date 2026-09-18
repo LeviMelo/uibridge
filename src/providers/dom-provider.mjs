@@ -890,7 +890,11 @@ export class DomProvider extends Provider {
       else if (how === 'file-chooser') await this.#attachByChooser(page, files)
       else throw new ContractError(this.id, 'attachStrategy', how)
       if (uploads) {
-        const done = await uploads.atLeast(files.length, this.settings.uploadTimeoutMs)
+        const wait = Math.min(
+          this.settings.uploadTimeoutMs,
+          Math.max(this.settings.uploadFloorMs ?? 0,
+            (this.settings.uploadPerFileMs ?? this.settings.uploadTimeoutMs) * files.length))
+        const done = await uploads.atLeast(files.length, wait)
         // A completed call is not the same as a processed file: the stream
         // has to say so (e.g. "file_ready"), or the site may still be
         // extracting text from it when the prompt goes out.
@@ -1104,6 +1108,8 @@ export class DomProvider extends Provider {
 
     await fillComposer(composer, prompt)
     for (let attempt = 1; attempt <= 2; attempt++) {
+      ctx.transportTiming ??= {}
+      ctx.transportTiming.submit = Date.now()
       await fire()
       try {
         if (ctx.wire) {
@@ -1211,6 +1217,8 @@ export class DomProvider extends Provider {
       })
     }
     ctx.index = acknowledged.index
+    ctx.transportTiming ??= {}
+    ctx.transportTiming.turn_appeared ??= Date.now()
 
     const transient = (s.transientText ?? []).map((t) => new RegExp(t, 'i'))
     const searchRe = s.searchTransient ? new RegExp(s.searchTransient, 'i') : null
@@ -1221,6 +1229,7 @@ export class DomProvider extends Provider {
       await waitStable(
         async () => {
           const t = await readRenderedText(page, { blocks: s.responseBlocks, text: s.responseText }, ctx.index)
+          if (t && !ctx.transportTiming.first_token) ctx.transportTiming.first_token = Date.now()
           if (searchRe && searchRe.test(t)) ctx.browsedHint = true
           return t
         },
@@ -1351,11 +1360,15 @@ export class DomProvider extends Provider {
     const cfg = { ...this.settings, responseTimeoutMs: ctx.responseTimeoutMs ?? this.settings.responseTimeoutMs }
     let lastProgress = ''
     const res = await ctx.wire.finished(cfg.responseTimeoutMs, (partial) => {
-      if (!ctx.onProgress || !partial?.body) return
+      // Decoding is only needed for a listener, or to stamp the first token.
+      if (!partial?.body || (!ctx.onProgress && ctx.transportTiming?.first_token)) return
       const decoded = decodeDeltaStream(partial.body)
       if (!decoded.text || decoded.text === lastProgress) return
+      ctx.transportTiming ??= {}
+      ctx.transportTiming.turn_appeared ??= Date.now()
+      ctx.transportTiming.first_token ??= Date.now()
       lastProgress = decoded.text
-      ctx.onProgress(decoded.text)
+      ctx.onProgress?.(decoded.text)
     })
     if (!res.ok && res.status && !(res.body && res.body.includes('data:'))) {
       let detail = res.body.slice(0, 300)

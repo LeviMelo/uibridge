@@ -17,7 +17,7 @@ test('concurrent acquisitions reserve capacity and hand off exclusively', async 
   }))
   await Promise.all(requests)
   assert.equal(opened, 2)
-  assert.deepEqual(pool.stats, { tabs: 2, busy: 0, waiting: 0 })
+  assert.deepEqual(pool.stats, { tabs: 2, capacity: 2, busy: 0, waiting: 0 })
   await pool.close()
 })
 
@@ -47,7 +47,7 @@ test('shutdown rejects queued and future acquisitions and closes in-flight tabs'
   await Promise.all([opening, queued, closing])
   assert.equal(p.isClosed(), true)
   await assert.rejects(pool.acquire(), { code: 'pool_closed' })
-  assert.deepEqual(pool.stats, { tabs: 0, busy: 0, waiting: 0 })
+  assert.deepEqual(pool.stats, { tabs: 0, capacity: 1, busy: 0, waiting: 0 })
 })
 
 test('discard replaces failed tabs; duplicate release cannot duplicate ownership', async () => {

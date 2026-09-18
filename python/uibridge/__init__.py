@@ -211,6 +211,11 @@ class Answer:
         return self._ub.get("elapsed_ms")
 
     @property
+    def transport_timing(self):
+        """Observed submit, turn, first-token and finish timestamps, if available."""
+        return self._ub.get("transport_timing")
+
+    @property
     def seconds(self):
         ms = self.elapsed_ms
         return None if ms is None else ms / 1000

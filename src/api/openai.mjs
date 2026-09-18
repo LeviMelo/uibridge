@@ -103,6 +103,7 @@ export function completionResponse({ modelId, result, provider, unsupported = []
       thread_id: result.thread_id,
       ledger: result.ledger ?? null,
       elapsed_ms: result.elapsed_ms,
+      transport_timing: result.transport_timing ?? null,
       // PROVENANCE: what the UI was actually on, read back from its own
       // controls after model and modes were applied. Requested is not
       // applied, and for a systematic review the difference is the audit

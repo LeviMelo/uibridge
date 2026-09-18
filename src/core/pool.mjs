@@ -32,7 +32,7 @@ export class TabPool {
   }
 
   get stats() {
-    return { tabs: this.#idle.length + this.#busy.size, busy: this.#busy.size, waiting: this.#waiters.length }
+    return { tabs: this.#idle.length + this.#busy.size, capacity: this.#max, busy: this.#busy.size, waiting: this.#waiters.length }
   }
 
   async acquire(signal = currentSignal()) {

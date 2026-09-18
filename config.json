@@ -6,7 +6,7 @@
   "profileDir": ".profiles",
   "downloadDir": "downloads",
   "provider": {
-    "concurrency": 2,
+    "concurrency": 4,
     "responseTimeoutMs": 600000,
     "pollMs": 150
   },

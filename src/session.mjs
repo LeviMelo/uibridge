@@ -239,10 +239,13 @@ export class Session {
       // read where a slow turn went instead of instrumenting it again.
       const t0 = Date.now()
       let mark = t0
+      // when each phase ended, reported with the answer as transport_timing
+      const phases = { start: t0 }
       const phase = (name) => {
         const now = Date.now()
         log.debug(`phase ${name}: ${((now - mark) / 1000).toFixed(1)}s (${((now - t0) / 1000).toFixed(1)}s in)`)
         mark = now
+        phases[`phase_${name}`] = now
       }
 
       await provider.prepareAuth(page)
@@ -418,6 +421,8 @@ export class Session {
       phase('submit')
 
       await provider.awaitCompletion(page, ctx)
+      ctx.transportTiming ??= {}
+      ctx.transportTiming.finish = Date.now()
       const result = await provider.extract(page, ctx)
       checkCancelled()
 
@@ -501,6 +506,10 @@ export class Session {
 
       const completed = {
         ...result,
+        transport_timing: Object.fromEntries(
+          Object.entries({ ...phases, ...(ctx.transportTiming ?? {}) })
+            .map(([name, ms]) => [name, new Date(ms).toISOString()])
+        ),
         input,
         thread_id: answeredThread,
         provenance,
