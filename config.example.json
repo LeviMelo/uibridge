@@ -81,6 +81,8 @@
     "_uploadPerFileMs": "Upload wait per attached file, so one stalled upload fails in minutes rather than ten; capped by uploadTimeoutMs.",
     "uploadFloorMs": 180000,
     "_uploadFloorMs": "Least an upload waits, whatever the file count: small batches always finished within 180 s.",
+    "sendDuringUpload": true,
+    "_sendDuringUpload": "Type and send the prompt while its attachments are still uploading, rather than after every upload is confirmed. Applies only where uploads are visible on the network (ChatGPT): the site holds a sent prompt until its files are ready, and a file it refuses still fails the request as upload_failed, before or after the send. Providers without that (Gemini) always wait. false restores the wait-then-type order.",
     "fileWaitMs": 20000,
     "_fileWaitMs": "Budget for retrieving one generated file once the page has been asked for it.",
     "pollMs": 150,

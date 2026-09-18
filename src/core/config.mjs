@@ -128,6 +128,15 @@ const DEFAULTS = {
     uploadTimeoutMs: 600000,
     uploadPerFileMs: 60000,
     uploadFloorMs: 180000,
+    // Type and send the prompt while its attachments are still uploading,
+    // instead of after every upload is confirmed. Only on a provider whose
+    // uploads are visible on the wire (ChatGPT): there the site holds a sent
+    // prompt until its files are ready - read from its own code and seen by
+    // the user - and the confirmations still catch a refused file after the
+    // send. Waiting first was our gate, not the site's, and each of the 31
+    // stalls above cost its whole budget before failing. See
+    // DomProvider.attach. false restores the wait-then-type order.
+    sendDuringUpload: true,
     fileWaitMs: 20000,
     pollMs: 150,
     // Consecutive identical reads that mean "finished". A measurement of

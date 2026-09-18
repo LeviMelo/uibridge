@@ -280,6 +280,42 @@ href**, so scanning for download affordances finds nothing; the true filename
 survives in the `aria-label`, unlike the attachment label above. A sibling card
 shows `recon_out.csv` with a `library-file-icon` testid.
 
+## Sending while a file uploads — READ FROM THE PAGE'S CODE, NOT YET MEASURED (2026-09-18)
+
+**Source:** the app's own JavaScript as captured on 2026-09-06, in the
+gitignored `testdata/capture/chatgpt-2026-09-06T20-53-18/net/` (chunks
+`conversation-small-*.js` and `8b34dbc2-*.js`). Names below are the
+minified ones in that build and will not survive a redeploy; the behaviour is
+what matters. It agrees with what the user sees driving the site by hand:
+the prompt can be sent while attachments are still uploading, and the model
+runs once they finish.
+
+- **Which drafts may be sent early.** A predicate (`ivi`) passes when every
+  attached file is ready, a library file, a **PDF** (`application/pdf` or a
+  `.pdf` name) or an **image** (`image/*`). When it passes, an upload in
+  progress does not block the send button (`hasBlockingPendingFiles` is
+  false) and the submit runs with `shouldWaitForPendingUploads`.
+- **The page holds the prompt.** That submit sets
+  `isWaitingForPendingUploadSubmit`, awaits the pending files (telemetry
+  event `ChatgptFileUploadPendingFileWait`), and only then builds and posts
+  the conversation request. If any file fails it returns without posting.
+  While it waits `canSubmit` is false, so a second click does nothing; the
+  wait is aborted only if the conversation changes or the composer unmounts.
+- **Anything else blocks.** A draft with any other file type still uploading
+  (a CSV, or the `.txt` carrier uibridge uses above `maxComposerChars`) fails
+  the predicate, and the send button stays disabled until the file is ready.
+
+This is why `sendDuringUpload` exists (see `DomProvider.attach`). What it
+predicts, for the live probe to confirm or refute:
+
+- a PDF prompt: `send_clicked` before `uploads_confirmed` in
+  `transport_timing`, and the conversation request (the wire's proof of
+  submission) only after `uploads_confirmed`;
+- a CSV prompt: the click waits on the send button's `aria-disabled`, so
+  `send_clicked` lands after `uploads_confirmed`, as before;
+- a refused file: no conversation request at all, and `upload_failed` with
+  `prompt_sent: false`.
+
 ---
 
 # Closed by measurement

@@ -420,6 +420,28 @@ class Capture {
     )
   }
 
+  /**
+   * many-mode: how many matching requests have gone OUT, finished or not.
+   *
+   * Not the same fact as completed(): a request the page sent and the server
+   * never finished answering counts here and not there. That is exactly the
+   * difference between "the file reached the site" and "the site is done with
+   * it".
+   */
+  requestCount() {
+    return this.#records.length
+  }
+
+  /**
+   * Wait until `test()` returns something truthy, re-checked whenever a
+   * matching request starts or finishes (and at least every 500 ms). For a
+   * condition over the collector that atLeast() cannot express - "any of
+   * these was refused, or all of them are done".
+   */
+  until(test, timeout, what = `${this.#pattern} requests`) {
+    return this.#until(test, timeout, what)
+  }
+
   stop() {
     this.release()
   }

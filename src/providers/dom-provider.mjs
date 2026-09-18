@@ -37,6 +37,7 @@ import { captureDownload, previewProgressed } from '../transports/files-wire.mjs
 import { cardFor, cardNames, downloadFromCard } from '../transports/file-card.mjs'
 import { classifyAnswer, errorPatterns } from '../core/answer-integrity.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
+import { UploadWatch, refusedUploads, uploadRefused } from '../transports/uploads.mjs'
 
 /**
  * True when a decoded response stream is not the whole turn: it ended
@@ -74,6 +75,14 @@ async function cdp(page) {
 
 export class DomProvider extends Provider {
   static #fileCollectors = new WeakMap()
+
+  // One request's attachments, carried from attach() to submit() and
+  // awaitCompletion(): session.mjs builds a provider per attempt, so this is
+  // per request. `#uploads` is the watch over uploads still in flight when
+  // the prompt goes out; `#uploadStamps` are transport_timing entries the
+  // waiting flow records before any request context exists.
+  #uploads = null
+  #uploadStamps = {}
 
   /** Overridden per provider; see each selectors.json. */
   static selectors = {}
@@ -884,35 +893,80 @@ export class DomProvider extends Provider {
     // before the files are handed over, so none can be missed.
     const uploadPattern = this.sel.wire?.upload
     const uploads = uploadPattern ? (await WireTap.attach(page)).collect(uploadPattern) : null
+    // A completed call is not the same as a processed file: the stream has
+    // to say so (e.g. "file_ready"), or the site may still be extracting
+    // text from it.
+    const ready = this.sel.wire?.uploadReady ? new RegExp(this.sel.wire.uploadReady) : null
+    const budget = this.#uploadBudget(files.length)
+
+    // SEND DURING UPLOAD (`sendDuringUpload`, on by default). The files are
+    // handed over and this returns at once: the prompt is typed while they
+    // upload and sent as soon as the site's own send button allows it.
+    // Waiting here for every confirmation was OUR gate, not the site's, and
+    // the expensive one - 31 of 1,205 requests (2026-09-17/18) sat on a
+    // process_upload_stream that never finished, each for the whole budget
+    // before failing. The user, who drives this site by hand, sends while
+    // attachments are still in flight and the model runs once they finish.
+    // The page's own code says the same (the 2026-09-06 capture, read
+    // 2026-09-18; docs/UI-RECON.md): a prompt sent with PDFs or images still
+    // uploading is HELD by the page and posted when every file is ready, one
+    // whose upload fails is not posted at all, and any other file type keeps
+    // the send button disabled until it is ready.
+    //
+    // ONLY WHERE THE UPLOAD IS ON THE WIRE. Once we stop waiting, the
+    // confirmations are what still catch a file the site refused (see
+    // transports/uploads.mjs). Gemini has no `wire.upload`, so nothing would
+    // watch its files after the send, and its send button is recorded (its
+    // selectors.json, `_upload`) as enabled while the file is still
+    // uploading, with the prompt then going out before the file lands. There
+    // the waiting flow below is the only protection, so it stays.
+    const overlap = !!uploads && this.settings.sendDuringUpload !== false
+    let handedOver = false
     try {
       if (how === 'cdp-drag') await this.#dropUntilRegistered(page, files)
       else if (how === 'file-input') await this.#attachByInput(page, files)
       else if (how === 'file-chooser') await this.#attachByChooser(page, files)
       else throw new ContractError(this.id, 'attachStrategy', how)
+      if (overlap) {
+        // The page must still have TAKEN the files: a chip, where the
+        // provider has one, and every upload request actually going out,
+        // which submit() checks after typing. A file that never left is not
+        // in flight, and sending without it is the one thing to avoid.
+        await this.waitForAttachments(page, files.length, { uploaded: false })
+        this.#uploads = new UploadWatch(uploads, { expected: files.length, budgetMs: budget, ready })
+        handedOver = true
+        this.log?.debug(`${files.length} file(s) handed to the page; the prompt goes out while they upload`)
+        return
+      }
       if (uploads) {
-        const wait = Math.min(
-          this.settings.uploadTimeoutMs,
-          Math.max(this.settings.uploadFloorMs ?? 0,
-            (this.settings.uploadPerFileMs ?? this.settings.uploadTimeoutMs) * files.length))
-        const done = await uploads.atLeast(files.length, wait)
-        // A completed call is not the same as a processed file: the stream
-        // has to say so (e.g. "file_ready"), or the site may still be
-        // extracting text from it when the prompt goes out.
-        const ready = this.sel.wire.uploadReady ? new RegExp(this.sel.wire.uploadReady) : null
-        const failed = done.filter((u) => !u.ok || (ready && !ready.test(u.body)))
-        if (failed.length) {
-          throw new BridgeError(
-            `${this.id}: ${failed.length} of ${files.length} upload(s) were refused by the site ` +
-              `(HTTP ${failed.map((u) => u.status ?? u.error).join(', ')})`,
-            { status: 502, code: 'upload_failed', retryable: true }
-          )
-        }
+        const done = await uploads.atLeast(files.length, budget)
+        const failed = refusedUploads(done, ready)
+        if (failed.length) throw uploadRefused(this.id, failed, files.length)
+        this.#uploadStamps.uploads_confirmed = Date.now()
         this.log?.debug(`${files.length} upload(s) confirmed on the wire`)
       }
       await this.waitForAttachments(page, files.length)
     } finally {
-      uploads?.stop()
+      if (!handedOver) uploads?.stop()
     }
+  }
+
+  /**
+   * How long `n` files may take to upload: `uploadPerFileMs` each, at least
+   * `uploadFloorMs`, at most `uploadTimeoutMs` (see config.mjs for the
+   * measurements behind each).
+   */
+  #uploadBudget(n) {
+    return Math.min(
+      this.settings.uploadTimeoutMs,
+      Math.max(this.settings.uploadFloorMs ?? 0,
+        (this.settings.uploadPerFileMs ?? this.settings.uploadTimeoutMs) * n))
+  }
+
+  /** The request is over, one way or another: release its upload watch. */
+  #endUploads() {
+    this.#uploads?.stop()
+    this.#uploads = null
   }
 
   /**
@@ -1005,17 +1059,25 @@ export class DomProvider extends Provider {
   }
 
   /**
-   * Wait until the UI has really registered the files.
+   * Wait until the UI has really registered the files - and, unless
+   * `uploaded: false`, finished uploading them.
    *
-   * Never key this off the send button: it is enabled the entire time, so the
-   * prompt goes out before the upload lands and the model answers about a
-   * file it never received. The chip appearing, and any "uploading" text
-   * going away, is the actual signal.
+   * Where the upload is not on the wire (Gemini), never key this off the
+   * send button: there it is enabled the entire time, so the prompt goes out
+   * before the upload lands and the model answers about a file it never
+   * received. The chip appearing, and any "uploading" text going away, is
+   * the actual signal.
+   *
+   * `uploaded: false` is the send-during-upload flow (see attach). The chip
+   * is still required - a file the page never took is not in flight - but
+   * the uploading text is not waited out: the page holds the send itself,
+   * and the upload confirmations on the wire, not its text, decide whether
+   * the file arrived.
    */
-  async waitForAttachments(page, n) {
+  async waitForAttachments(page, n, { uploaded = true } = {}) {
     const s = this.sel
     if (!s.attachmentChip) return
-    const uploading = s.uploadingText ? new RegExp(s.uploadingText, 'i') : null
+    const uploading = uploaded && s.uploadingText ? new RegExp(s.uploadingText, 'i') : null
     // SAY WHAT WAS SEEN, NOT JUST THAT TIME RAN OUT. There are two very
     // different failures behind "waiting for 1 attachment(s)": the file never
     // reached the page at all (no chip - the trusted drag did not land), or
@@ -1070,8 +1132,23 @@ export class DomProvider extends Provider {
    * retry once before giving up.
    */
   async submit(page, prompt, ctx = {}) {
+    try {
+      return await this.#send(page, prompt, ctx)
+    } catch (e) {
+      // A request that fails here never reaches awaitCompletion, which is
+      // where an upload watch is otherwise released.
+      this.#endUploads()
+      throw e
+    }
+  }
+
+  async #send(page, prompt, ctx) {
     const s = this.sel
     const composer = page.locator(s.composer).first()
+    // Uploads still in flight, when attach() handed them over (see there).
+    const flight = this.#uploads
+    ctx.transportTiming ??= {}
+    Object.assign(ctx.transportTiming, this.#uploadStamps)
 
     // ARM THE WIRE BEFORE TYPING. On a wired provider the answer is read
     // from the response the page receives, and a tap armed after the click
@@ -1084,8 +1161,20 @@ export class DomProvider extends Provider {
     // for it. Arming here costs one CDP subscription per tab.
     this.fileBytes(await WireTap.attach(page))
 
+    // A refusal already on the wire ends the request BEFORE the click. The
+    // page would not post a prompt whose file it refused, and a send button
+    // it re-enables after dropping that file must not be clicked either.
+    const refusedBeforeSend = () => {
+      const failed = flight?.refused()
+      if (failed) throw uploadRefused(this.id, failed, flight.expected)
+    }
+
     const fire = async () => {
-      if (s.submitKey) return composer.press(s.submitKey)
+      refusedBeforeSend()
+      if (s.submitKey) {
+        ctx.transportTiming.send_clicked = Date.now()
+        return composer.press(s.submitKey)
+      }
       await this.requireContract(page, 'sendButton', s.sendButton)
       const send = page.locator(s.sendButton).first()
       // THE APP'S OWN "NOT YET". MEASURED 2026-09-17 on ChatGPT: for a few
@@ -1095,38 +1184,62 @@ export class DomProvider extends Provider {
       // for the attribute to clear costs those seconds once instead of a
       // wasted attempt plus an 8s confirmation window. Bounded: a site that
       // never clears it is reported by the click path, not waited on.
+      //
+      // With uploads in flight this is the only upload gate left, and it is
+      // the site's own: its code (2026-09-06 capture) keeps the button
+      // disabled while a file it cannot send early is still uploading, and
+      // enables it at once for PDFs and images, whose send it holds itself.
+      // A refusal, or the upload budget running out, ends the wait early -
+      // the same budget the waiting flow spent, so a stall costs no more
+      // than it did.
       await waitFor(
-        async () => ((await send.getAttribute('aria-disabled').catch(() => null)) === 'true' ? null : true),
+        async () => (flight?.refused() || flight?.expired() ||
+          (await send.getAttribute('aria-disabled').catch(() => null)) !== 'true' ? true : null),
         { timeout: this.settings.uploadTimeoutMs ?? 30000, poll: this.settings.pollMs, what: 'the send button to be enabled' }
       ).catch(() => {})
+      refusedBeforeSend()
+      if (flight?.expired()) throw this.#uploadsStalled(flight)
       // Through any blocking notice: the rate-limit modal covers the
       // composer too, and a swallowed send presents as "no turn appeared".
       // The send button sits in the sticky composer and is always on
       // screen, so it is never scrolled (see clickThrough).
+      ctx.transportTiming.send_clicked = Date.now()
       await this.clickThrough(send, { timeout: 15000, what: 'the send button', scroll: false })
     }
 
+    const confirm = async () => {
+      if (flight) return this.#awaitHeldSend(composer, ctx, flight)
+      if (ctx.wire) {
+        await ctx.wire.request(8000)
+        return
+      }
+      // Submission clears the composer. Seconds, not minutes - if it has
+      // not happened by now it is not going to.
+      await waitFor(
+        async () => {
+          const left = ((await readComposer(composer).catch(() => '')) ?? '').trim()
+          return left ? null : true
+        },
+        { timeout: 8000, poll: this.settings.pollMs, what: 'the composer to clear after sending' }
+      )
+    }
+
+    // Typing starts the moment the files are handed over; with uploads in
+    // flight it overlaps them instead of following them.
+    ctx.transportTiming.typing = Date.now()
     await fillComposer(composer, prompt)
+    if (flight) await this.#awaitUploadsStarted(flight, ctx)
+
     for (let attempt = 1; attempt <= 2; attempt++) {
-      ctx.transportTiming ??= {}
       ctx.transportTiming.submit = Date.now()
       await fire()
       try {
-        if (ctx.wire) {
-          await ctx.wire.request(8000)
-          return
-        }
-        // Submission clears the composer. Seconds, not minutes - if it has
-        // not happened by now it is not going to.
-        await waitFor(
-          async () => {
-            const left = ((await readComposer(composer).catch(() => '')) ?? '').trim()
-            return left ? null : true
-          },
-          { timeout: 8000, poll: this.settings.pollMs, what: 'the composer to clear after sending' }
-        )
+        await confirm()
         return
-      } catch {
+      } catch (e) {
+        // What happened to the files is the answer to "why", not a click
+        // that did not take - and it must not be retried as one.
+        if (/^upload_/.test(e?.code ?? '')) throw e
         const remaining = await readComposer(composer).catch(() => null)
         if (remaining === null || normalizeComposerText(remaining) !== normalizeComposerText(prompt)) {
           throw new BridgeError('Submission could not be confirmed; refusing to resend a possibly accepted prompt', {
@@ -1144,7 +1257,144 @@ export class DomProvider extends Provider {
     }
   }
 
+  /**
+   * Every file has LEFT for the site: one upload request per file has gone
+   * out. Checked after typing, so the two overlap.
+   *
+   * This is the send-during-upload flow's "the page took the file". ChatGPT
+   * has no measured composer chip, and before this flow the confirmation
+   * wait was the only check that a file reached the site at all; without a
+   * replacement, a file input whose change never registered would send the
+   * prompt bare. It costs nothing in time-to-answer: the request going out
+   * precedes the file being ready, and the page does not post the prompt
+   * before that anyway.
+   */
+  async #awaitUploadsStarted(flight, ctx) {
+    const seen = await flight.registered()
+    if (seen.refused) throw uploadRefused(this.id, seen.refused, flight.expected)
+    if (seen.started >= flight.expected) {
+      ctx.transportTiming.uploads_registered = flight.registeredAt ?? Date.now()
+      return
+    }
+    // SAY WHAT WAS SEEN (see waitForAttachments): an upload that started and
+    // never finished holds back the ones queued behind it, which is the site
+    // being slow; none starting is the file never reaching it.
+    const inProgress = seen.started - seen.finished
+    throw new BridgeError(
+      inProgress
+        ? `${this.id}: only ${seen.started} of ${flight.expected} upload(s) started in ${Math.round(flight.budgetMs / 1000)}s, ` +
+            `and the site is still processing ${inProgress} of them. Nothing was sent.`
+        : `${this.id}: only ${seen.started} of ${flight.expected} attachment(s) ever started uploading - ` +
+            'the file never reached the site. Nothing was sent.',
+      {
+        status: 504,
+        code: inProgress ? 'upload_slow' : 'upload_not_registered',
+        retryable: true,
+        detail: { expected: flight.expected, started: seen.started, finished: seen.finished },
+      }
+    )
+  }
+
+  /**
+   * Confirm a send made while uploads were still in flight.
+   *
+   * The page HOLDS such a prompt until every file is ready, with the prompt
+   * still in the composer, so its own conversation request - the proof of
+   * submission - can come long after the click. Treating that as "the send
+   * did not take" would click again at a composer the page is about to
+   * post. So the usual 8 s window runs from the later of the click and the
+   * last upload confirmation; a refusal ends the wait, and so does the
+   * upload budget (plus that window) running out with files unconfirmed.
+   */
+  async #awaitHeldSend(composer, ctx, flight) {
+    const clicked = Date.now()
+    const window = 8000
+    const sent = ctx.wire
+      ? async () => !!ctx.wire.partial()
+      : async () => {
+        const left = await readComposer(composer).catch(() => null)
+        return left !== null && !left.trim()
+      }
+    let outcome = null
+    await waitFor(
+      async () => {
+        if (await sent()) return (outcome = 'sent')
+        if (flight.refused()) return (outcome = 'refused')
+        const all = flight.confirmedAt
+        if (all != null && Date.now() - Math.max(all, clicked) > window) return (outcome = 'unsent')
+        return null
+      },
+      {
+        timeout: Math.max(0, flight.deadline - clicked) + window,
+        poll: this.settings.pollMs,
+        what: 'the page to send the prompt once its uploads finish',
+      }
+    ).catch((e) => {
+      if (!(e instanceof TimeoutError)) throw e
+    })
+    if (outcome === 'sent' || (!outcome && (await sent()))) return
+    if (outcome === 'refused') throw uploadRefused(this.id, flight.refused(), flight.expected)
+    // Every file was confirmed and still nothing went out: an ordinary send
+    // that did not take, handled (and retried once) as one.
+    if (outcome === 'unsent') throw new TimeoutError('the page to send the prompt after its uploads were confirmed', window)
+    throw this.#uploadsStalled(flight)
+  }
+
+  /** The upload budget ran out before every file was confirmed. */
+  #uploadsStalled(flight) {
+    const finished = flight.finished()
+    return new BridgeError(
+      `${this.id}: ${flight.expected - finished} of ${flight.expected} upload(s) were still unconfirmed after ` +
+        `${Math.round(flight.budgetMs / 1000)}s, and the site does not post a prompt before its files are ready. Nothing was sent.`,
+      {
+        status: 504,
+        code: 'upload_slow',
+        retryable: true,
+        detail: { expected: flight.expected, started: flight.started(), finished },
+      }
+    )
+  }
+
   // --- completion ----------------------------------------------------------
+
+  /**
+   * Wait for the answer - and, when the prompt went out with its uploads
+   * still in flight, keep watching them while it arrives.
+   *
+   * The page posts such a prompt only once every file is ready (see
+   * attach), so on ChatGPT a refusal after the send should not happen. It is
+   * watched for anyway, because the one outcome that must never occur is an
+   * answer returned as if it were about a file the site refused: a refusal
+   * cancels the wait the moment it arrives, and is looked for once more
+   * when the answer is complete.
+   *
+   * A confirmation our tap never saw is not a refusal. The page posted the
+   * prompt, and it does that only once its files are ready, so the answer
+   * is returned; the warning, and `uploads_confirmed` missing from
+   * transport_timing, say what was not observed.
+   */
+  async awaitCompletion(page, ctx) {
+    const flight = this.#uploads
+    if (!flight) return this.#awaitAnswer(page, ctx)
+    try {
+      const refusedAfterSend = (failed) => uploadRefused(this.id, failed, flight.expected, { sent: true })
+      await flight.guard(() => this.#awaitAnswer(page, ctx), refusedAfterSend)
+      const late = flight.refused()
+      if (late) throw refusedAfterSend(late)
+      ctx.transportTiming ??= {}
+      if (flight.confirmedAt) {
+        ctx.transportTiming.uploads_confirmed = flight.confirmedAt
+      } else {
+        this.log?.warn(
+          `the answer arrived with ${flight.expected - flight.finished()} of ${flight.expected} upload(s) never ` +
+            'confirmed on the wire; the page posted the prompt, which it does only once its files are ready'
+        )
+      }
+      return ctx
+    } finally {
+      this.#endUploads()
+    }
+  }
 
   /**
    * Done means ALL of: a new turn exists, its text stopped changing, the text
@@ -1154,7 +1404,7 @@ export class DomProvider extends Provider {
    * pause mid-stream. The stop control alone flickers. Ignoring placeholders
    * returns "Searching the internet" as the model's answer.
    */
-  async awaitCompletion(page, ctx) {
+  async #awaitAnswer(page, ctx) {
     const s = this.sel
     // The request's own response budget when it declared one (a long,
     // file-producing turn), the provider's otherwise.

@@ -22,6 +22,7 @@ import { RequestError, SignedOutError, ContractError } from '../src/core/errors.
 import { decideSession, signedOutMessage } from '../src/core/auth.mjs'
 import { decodeDeltaStream, stripMarkers, parseSSE } from '../src/transports/sse-openai.mjs'
 import { WireTap } from '../src/transports/wire.mjs'
+import { DomProvider } from '../src/providers/dom-provider.mjs'
 import { Pacer } from '../src/core/async.mjs'
 import { mergeReading, orderedMessages, contentKey, stitchRun, readingAgrees, sweepThread } from '../src/transports/thread-dom.mjs'
 import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
@@ -764,6 +765,234 @@ test('wire tap: the body the page sent is readable, fetched on demand', async ()
   const cap = tap.expect(/answer/)
   cdp.emit('Network.requestWillBeSent', { requestId: '4', request: { url: 'https://x/answer', method: 'POST', hasPostData: true } })
   assert.equal(JSON.parse(await cap.sentBody()).model, 'gpt-5-6-thinking')
+})
+
+// --- sending while attachments upload ---------------------------------------
+// DomProvider.attach/submit/awaitCompletion driven against a stand-in page
+// and the fake CDP client above. The page is scripted per test to do what
+// the site's own code does (2026-09-06 capture): hold a prompt sent during an
+// upload and post it once the file is ready, or not post it at all when the
+// upload is refused. What is tested is our ordering and our verdicts, not
+// the site.
+
+const UPLOAD_URL = 'https://chat.test/backend-api/files/process_upload_stream'
+const READY = '{"event":"file.processing.file_ready"}'
+const tickUp = () => new Promise((r) => setImmediate(r))
+
+class WiredUploads extends DomProvider {
+  static id = 'wired'
+  static selectors = {
+    composer: '#composer', sendButton: '#send', fileInput: '#file',
+    attachStrategy: 'file-input', attachmentChip: null,
+    wire: { answer: '/backend-api/(f/)?conversation$', upload: '/backend-api/files/process_upload_stream$', uploadReady: 'file_ready' },
+  }
+}
+
+// Gemini's shape: no upload on the wire, readiness read off the page.
+class PageUploads extends DomProvider {
+  static id = 'paged'
+  static selectors = {
+    composer: '#composer', sendButton: '#send', fileInput: '#file', dropTarget: '#drop',
+    attachStrategy: 'file-input', attachmentChip: '.chip', uploadingText: 'Uploading file',
+  }
+}
+
+const uploadSettings = (over = {}) => ({
+  url: 'https://chat.test/', pollMs: 5, responseTimeoutMs: 5000, submitAckMs: 1000, settleChecks: 2,
+  uploadTimeoutMs: 600000, uploadPerFileMs: 60000, uploadFloorMs: 180000, sendDuringUpload: true, ...over,
+})
+
+function composerPage(cdp, { onFiles, onClick } = {}) {
+  const state = { composer: '', events: [], clicks: 0, chips: 0, body: '', ariaDisabled: null }
+  let page
+  const locator = (sel) => {
+    const l = {
+      first: () => l, nth: () => l, filter: () => l, page: () => page,
+      count: async () => (sel === '.chip' ? state.chips : 1),
+      setInputFiles: async (paths) => { state.events.push('files'); await onFiles?.(paths, state) },
+      fill: async (text) => { state.events.push('typing'); state.composer = text },
+      evaluate: async (fn) => fn({ value: state.composer }),
+      getAttribute: async (name) => (name === 'aria-disabled' ? state.ariaDisabled : null),
+      click: async () => { state.events.push('click'); state.clicks++; onClick?.(state) },
+      innerText: async () => state.body,
+      isVisible: async () => false,
+    }
+    return l
+  }
+  page = { context: () => ({ newCDPSession: async () => cdp }), once() {}, locator, url: () => 'https://chat.test/', keyboard: { press: async () => {} } }
+  return { page, state }
+}
+
+const uploadStarts = (cdp, id) =>
+  cdp.emit('Network.requestWillBeSent', { requestId: id, request: { url: UPLOAD_URL, method: 'POST' } })
+async function uploadEnds(cdp, id, { status = 200, body = READY } = {}) {
+  cdp.emit('Network.responseReceived', { requestId: id, response: { status, mimeType: 'text/event-stream' } })
+  await tickUp()
+  cdp.emit('Network.dataReceived', { requestId: id, data: b64(body) })
+  cdp.emit('Network.loadingFinished', { requestId: id })
+}
+const promptPosted = (cdp) =>
+  cdp.emit('Network.requestWillBeSent', { requestId: 'conv', request: { url: 'https://chat.test/backend-api/f/conversation', method: 'POST' } })
+async function answerArrives(cdp, text, { finish = true } = {}) {
+  cdp.emit('Network.responseReceived', { requestId: 'conv', response: { status: 200, mimeType: 'text/event-stream' } })
+  await tickUp()
+  const body = sse([{ data: JSON.stringify({ p: '', o: 'add', c: 0, v: JSON.parse(msg('assistant', 'text', [text])) }) }, ...(finish ? [{ data: '[DONE]' }] : [])])
+  cdp.emit('Network.dataReceived', { requestId: 'conv', data: b64(body) })
+  if (finish) cdp.emit('Network.loadingFinished', { requestId: 'conv' })
+}
+
+test('send during upload: the prompt is typed and sent while the upload is still running', async () => {
+  const cdp = fakeCDP()
+  let uploaded = false
+  let clickedDuringUpload = null
+  const { page, state } = composerPage(cdp, {
+    onFiles: () => uploadStarts(cdp, 'u1'),
+    // The page holds the prompt, finishes the file, and only then posts.
+    onClick: () => {
+      clickedDuringUpload = !uploaded
+      setTimeout(async () => { await uploadEnds(cdp, 'u1'); uploaded = true; promptPosted(cdp) }, 20)
+    },
+  })
+  const p = new WiredUploads({ settings: uploadSettings() })
+  await p.attach(page, ['trial.pdf'])
+  assert.equal(uploaded, false, 'attach returns without waiting for the confirmation')
+  const ctx = {}
+  await p.submit(page, 'Summarise the attached trial.', ctx)
+  assert.deepEqual(state.events, ['files', 'typing', 'click'])
+  assert.equal(clickedDuringUpload, true, 'the send went out while the file was still uploading')
+  assert.equal(state.clicks, 1, 'a prompt the page is holding is not clicked again')
+
+  const done = p.awaitCompletion(page, ctx)
+  await answerArrives(cdp, 'the answer')
+  await done
+  assert.equal(ctx.wireResult.decoded.text, 'the answer')
+  const t = ctx.transportTiming
+  assert.ok(t.typing <= t.send_clicked, 'typing is stamped before the click')
+  assert.ok(t.send_clicked < t.uploads_confirmed, 'the confirmation arrived after the send, and is stamped')
+  assert.ok(t.uploads_registered, 'the moment every upload request had gone out is stamped')
+})
+
+test('send during upload: a refusal already on the wire is upload_failed and nothing is clicked', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp, {
+    onFiles: async () => { uploadStarts(cdp, 'u1'); await uploadEnds(cdp, 'u1', { status: 500, body: '{"detail":"unsupported"}' }) },
+  })
+  const p = new WiredUploads({ settings: uploadSettings() })
+  await p.attach(page, ['trial.pdf'])
+  await assert.rejects(p.submit(page, 'Summarise it.', {}), (e) => {
+    assert.equal(e.code, 'upload_failed')
+    assert.equal(e.retryable, true)
+    assert.equal(e.detail.prompt_sent, false)
+    return true
+  })
+  assert.equal(state.clicks, 0)
+})
+
+test('send during upload: a refusal while the page holds the prompt is upload_failed, not a retried click', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp, {
+    onFiles: () => uploadStarts(cdp, 'u1'),
+    // The site's own code: a held prompt whose upload fails is never posted.
+    onClick: () => setTimeout(() => uploadEnds(cdp, 'u1', { body: '{"event":"file.processing.failed"}' }), 10),
+  })
+  const p = new WiredUploads({ settings: uploadSettings() })
+  await p.attach(page, ['trial.pdf'])
+  await assert.rejects(p.submit(page, 'Summarise it.', {}), (e) => {
+    assert.equal(e.code, 'upload_failed')
+    assert.equal(e.detail.prompt_sent, false)
+    return true
+  })
+  assert.equal(state.clicks, 1)
+})
+
+test('send during upload: a refusal after the prompt went out fails the request instead of returning its answer', async () => {
+  const cdp = fakeCDP()
+  const { page } = composerPage(cdp, {
+    onFiles: () => uploadStarts(cdp, 'u1'),
+    onClick: () => promptPosted(cdp),
+  })
+  const p = new WiredUploads({ settings: uploadSettings() })
+  await p.attach(page, ['trial.pdf'])
+  const ctx = {}
+  await p.submit(page, 'Summarise it.', ctx)
+  const started = Date.now()
+  const waiting = p.awaitCompletion(page, ctx)
+  await answerArrives(cdp, 'an answer about nothing', { finish: false })
+  await uploadEnds(cdp, 'u1', { status: 413, body: '{"detail":"too large"}' })
+  await assert.rejects(waiting, (e) => {
+    assert.equal(e.code, 'upload_failed')
+    assert.equal(e.detail.prompt_sent, true)
+    assert.match(e.message, /never received/)
+    return true
+  })
+  assert.ok(Date.now() - started < 2000, 'the refusal ends the wait; the response timeout does not')
+})
+
+test('send during upload: a file whose upload never starts is not sent bare', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp)
+  const p = new WiredUploads({ settings: uploadSettings({ uploadTimeoutMs: 150, uploadPerFileMs: 150, uploadFloorMs: 0 }) })
+  await p.attach(page, ['trial.pdf'])
+  await assert.rejects(p.submit(page, 'Summarise it.', {}), (e) => {
+    assert.equal(e.code, 'upload_not_registered')
+    assert.match(e.message, /Nothing was sent/)
+    return true
+  })
+  assert.equal(state.clicks, 0)
+})
+
+test('send during upload: a site that keeps send disabled costs the upload budget, not more', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp, { onFiles: (_p, s) => { s.ariaDisabled = 'true'; uploadStarts(cdp, 'u1') } })
+  const p = new WiredUploads({ settings: uploadSettings({ uploadTimeoutMs: 150, uploadPerFileMs: 150, uploadFloorMs: 0 }) })
+  await p.attach(page, ['notes.csv'])
+  const started = Date.now()
+  await assert.rejects(p.submit(page, 'Summarise it.', {}), { code: 'upload_slow' })
+  assert.ok(Date.now() - started < 2000)
+  assert.equal(state.clicks, 0)
+})
+
+test('sendDuringUpload false: every upload is confirmed before a word is typed', async () => {
+  const cdp = fakeCDP()
+  let uploaded = false
+  const { page, state } = composerPage(cdp, {
+    onFiles: () => { uploadStarts(cdp, 'u1'); setTimeout(async () => { await uploadEnds(cdp, 'u1'); uploaded = true }, 30) },
+    onClick: () => promptPosted(cdp),
+  })
+  const p = new WiredUploads({ settings: uploadSettings({ sendDuringUpload: false }) })
+  await p.attach(page, ['trial.pdf'])
+  assert.equal(uploaded, true, 'attach waited for the confirmation')
+  const ctx = {}
+  await p.submit(page, 'Summarise it.', ctx)
+  assert.deepEqual(state.events, ['files', 'typing', 'click'])
+  assert.ok(ctx.transportTiming.uploads_confirmed <= ctx.transportTiming.typing)
+  assert.ok(ctx.transportTiming.typing <= ctx.transportTiming.send_clicked)
+})
+
+test('sendDuringUpload false: a refused upload still fails inside attach', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp, {
+    onFiles: () => { uploadStarts(cdp, 'u1'); setTimeout(() => uploadEnds(cdp, 'u1', { status: 500, body: '' }), 10) },
+  })
+  const p = new WiredUploads({ settings: uploadSettings({ sendDuringUpload: false }) })
+  await assert.rejects(p.attach(page, ['trial.pdf']), { code: 'upload_failed' })
+  assert.deepEqual(state.events, ['files'])
+})
+
+test('without a wire upload the page is still waited out, whatever sendDuringUpload says', async () => {
+  const cdp = fakeCDP()
+  let landed = null
+  const { page, state } = composerPage(cdp, {
+    onFiles: (_p, s) => {
+      s.chips = 1
+      s.body = 'Uploading file'
+      setTimeout(() => { s.body = ''; landed = Date.now() }, 40)
+    },
+  })
+  const p = new PageUploads({ settings: uploadSettings({ sendDuringUpload: true }) })
+  await p.attach(page, ['trial.pdf'])
+  assert.ok(landed, 'attach returned only after the uploading text went away')
+  assert.equal(state.body, '')
 })
 
 // --- pacing --------------------------------------------------------------------

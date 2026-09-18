@@ -532,7 +532,7 @@ The complete set, from a real response:
 | field | why it exists |
 |---|---|
 | `provider`, `request_id`, `elapsed_ms` | Which provider answered, the id this run is logged under, and how long it took end to end. |
-| `transport_timing` | Observed UTC timestamps for `submit`, `turn_appeared`, `first_token`, and `finish` when the provider exposes each event. Missing events are omitted rather than inferred. |
+| `transport_timing` | Observed UTC timestamps for each event the provider exposes. Missing events are omitted rather than inferred. `phase_<name>` marks the end of each session phase (`auth`, `open`, `thread`, `notices`, `history`, `attach`, `baseline`, `submit`). `typing` is when the prompt started going into the composer, `submit` when each send attempt began, `send_clicked` when the send control was pressed, then `turn_appeared`, `first_token` and `finish`. With attachments on a provider whose uploads are on the wire (ChatGPT): `uploads_registered` is when every upload request had gone out, and `uploads_confirmed` when the site had confirmed every file. With `sendDuringUpload` on (the default), `send_clicked` normally comes before `uploads_confirmed` and the answer's request after it; off, the confirmation comes before `typing`. An answer whose attachments have no `uploads_confirmed` was posted by the page, which it does only once its files are ready, but the confirmations never crossed the tap. |
 | `input.characters`, `input.sha256`, `input.transport` | Exactly what was sent, hashed, and *how*: `composer` (typed) or `attachment` (too large to type, so carried as a temporary UTF-8 file). A prompt that took the attachment path is a different experiment from one that did not. |
 | `ledger.path` | Local JSONL audit file for this native thread. |
 | `provenance.model.requested` / `.note` | What you asked for, and why the verdict is what it is (`already active`, `unknown model`, ...). |
@@ -684,7 +684,7 @@ retryable.
 | 502 | `model_unverified`, `model_not_applied`, `mode_not_applied` | The model or mode could not be confirmed from the UI. Under `strictModel: false` the first becomes a flag instead. |
 | 502 | `submit_failed`, `submit_uncertain`, `compose_failed` | The prompt did not go out, or it is not certain that it did. |
 | 502 | `thread_mismatch`, `thread_unidentified` | The page is not on the thread we asked for, or will not say which thread it is on. |
-| 502 | `upload_failed` | The site refused an attachment. |
+| 502 | `upload_failed` | The site refused an attachment. With `sendDuringUpload` the refusal can arrive after the prompt went out; `detail.prompt_sent` says which. A sent prompt's answer is then withheld, because it would be about a file the model never received, and on a continued thread a retry types the prompt into that thread again. |
 | 502 | `upstream_refused` | The site answered the page's own conversation request with an HTTP error that carried no stream. Distinct from `rate_limited`, which is specifically a 429. |
 | 502 | `empty_response` | The turn completed and the provider produced no answer text at all. |
 | 502 | `download_identifier`, `download_artifact_missing`, `download_cancelled`, `download_save_failed`, `download_failed` | A generated file could not be retrieved. `download_save_failed` means the browser finished the download but the bytes could not be written to disk; `download_failed` is the fallback on a file record whose retrieval failed with no more specific cause. |
@@ -697,8 +697,8 @@ retryable.
 | 503 | `daemon_not_running`, `daemon_start_failed`, `daemon_incompatible` | CLI-side: no daemon, it would not start, or the port belongs to another build. |
 | 504 | `timeout`, `request_timeout` | A wait exceeded its budget. |
 | 504 | `composer_unavailable` | The prompt box never became usable. The message names the page and any notice that was covering it. |
-| 504 | `upload_not_registered` | The file never reached the page. Nothing was sent. |
-| 504 | `upload_slow` | The file is attached and the site is still uploading it. |
+| 504 | `upload_not_registered` | The file never reached the page (no chip appeared, or no upload request ever went out). Nothing was sent. |
+| 504 | `upload_slow` | The file is attached and the site is still uploading it. With `sendDuringUpload`, the site held the sent prompt for files that did not finish within the upload budget, so nothing reached the model. |
 | 500 | `internal`, `chrome_missing`, `port_in_use`, `client_disconnected`, `not_implemented`, `bridge_error` | Local environment, or a bug in here. An unrecognised internal error stays a 500 on purpose rather than being dressed up as something familiar. |
 
 ## Architecture
