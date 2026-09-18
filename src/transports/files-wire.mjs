@@ -54,6 +54,30 @@ export function parseSchemeLinks(text, scheme = 'sandbox') {
 }
 
 /**
+ * The files a turn offers, named by its download controls, for a turn whose
+ * text was read off the page rather than the wire.
+ *
+ * The rendered turn draws each `sandbox:` link as a button labelled with the
+ * file's name and keeps no link in the DOM, so text rebuilt from the page
+ * names no file. Measured 2026-09-18 on a six-file ChatGPT turn: six
+ * `button.behavior-btn` labelled `manuscript_en.md` .. `manuscript_pt-BR.pdf`,
+ * no anchors, and the copy control timing out. Only a label that names a
+ * file (one segment with an extension) counts. The page shows no path, so
+ * the path is the name.
+ */
+export function linksFromControls(labels) {
+  const out = []
+  const seen = new Set()
+  for (const label of labels ?? []) {
+    const name = (label ?? '').trim()
+    if (!/^[^/\\]+\.[A-Za-z0-9]{1,8}$/.test(name) || seen.has(name)) continue
+    seen.add(name)
+    out.push({ label: name, path: name })
+  }
+  return out
+}
+
+/**
  * The filename a server declares, or null.
  *
  * RFC 5987's `filename*=UTF-8''...` wins over plain `filename=` when both

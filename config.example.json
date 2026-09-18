@@ -71,6 +71,8 @@
     "_submitAckMs": "How long to wait for a turn to appear after sending. Short on purpose: a prompt that never went out should fail in a minute, not sit for the full response budget.",
     "responseTimeoutMs": 600000,
     "_responseTimeoutMs": "A thinking model can take minutes. This is the ceiling for one answer.",
+    "wireStallMs": 60000,
+    "_wireStallMs": "How long the page may show a turn finished while the answer's stream has not reported an end, before the answer is read off the page. A connection lost mid-turn can leave the stream's end unseen (measured 2026-09-18: a finished draft waited out its 2,700 s budget).",
     "historyBaselineMs": 8000,
     "historyTimeoutMs": 60000,
     "_threadResumeMs": "how long a requested thread has to appear in the URL after we navigate to it; nothing is sent until it does",

@@ -322,6 +322,45 @@ href**, so scanning for download affordances finds nothing; the true filename
 survives in the `aria-label`, unlike the attachment label above. A sibling card
 shows `recon_out.csv` with a `library-file-icon` testid.
 
+## A connection lost mid-turn (measured 2026-09-18)
+
+**The event.** c12's manuscript turn (one bundle, six files, the high tier) was
+sent at 18:49:27Z. The page's own resource timing, read afterwards in the tab:
+
+| UTC | the page |
+|---|---|
+| 18:49:27 → 18:54:44 | `POST /backend-api/f/conversation`, the answer's stream, 318 s |
+| 18:54:44 → 19:05:42 | no request at all: the connection was down |
+| 19:05:42 - 19:06:54 | `f/conversation/resume`, seven tries, the last open 60 s |
+| 19:06:47 - 19:07:03 | six `interpreter/download`: the page fetched the six files |
+
+The turn was finished on the page by 19:07, the files named by six
+`button.behavior-btn` and no anchor. The tap never saw the first stream end:
+none of the four ways out of the stream wait logged, and the request timed
+out at 2,700 s, its whole budget, reporting every file missing.
+
+**Two probes on a trivial answer** (the integers 1 to 4,000, the instant
+tier, about 100 s of streaming):
+
+| cut, 2 s into the stream | what happened |
+|---|---|
+| the tab emulated offline for 20 s (`Network.emulateNetworkConditions`) | the stream paused and went on; the whole answer came off the wire, no warning |
+| the automation browser's socket pools flushed (`chrome://net-internals`) | the stream failed `net::ERR_ABORTED`; the page resumed and finished; uibridge followed it on the page, and then **refused the whole answer as `model_unverified`**: a page-read answer had no model slug |
+
+On both page-read turns the copy control timed out (`locator.click: Timeout
+5000ms`) and the text was rebuilt from the DOM, which draws a generated
+file as a download button, not a link.
+
+**Fixed:**
+
+- `wireStallMs` (60 s): a turn the page shows finished, while its stream is
+  still open, is read from the page (`wire_stalled`).
+- A page-read answer's model is the slug on its own message
+  (`data-message-model-slug`, `model_source: page`). The flushed-socket probe
+  repeated on the fix returned the whole answer, verified.
+- A page-read answer's files are named by the turn's download controls
+  (`linksFromControls`).
+
 ## Sending while a file uploads — READ FROM THE PAGE'S CODE, NOT YET MEASURED (2026-09-18)
 
 **Source:** the app's own JavaScript as captured on 2026-09-06, in the

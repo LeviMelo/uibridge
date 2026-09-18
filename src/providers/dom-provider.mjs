@@ -19,6 +19,7 @@ import { Provider, Capabilities } from './contract.mjs'
 import { BridgeError, ChallengeError, ContractError, SignedOutError, TimeoutError } from '../core/errors.mjs'
 import { sessionState, signedOutMessage } from '../core/auth.mjs'
 import { sleep, waitFor, waitStable } from '../core/async.mjs'
+import { currentSignal, withCancellation } from '../core/cancel.mjs'
 import { parseCodeBlocks, parseTables } from '../core/markdown.mjs'
 import {
   copyMarkdown,
@@ -38,6 +39,10 @@ import { cardFor, cardNames, downloadFromCard } from '../transports/file-card.mj
 import { classifyAnswer, errorPatterns } from '../core/answer-integrity.mjs'
 import { decodeDeltaStream } from '../transports/sse-openai.mjs'
 import { UploadWatch, refusedUploads, uploadRefused } from '../transports/uploads.mjs'
+
+/** The default `wireStallMs` (see config.mjs), and what its expiry yields. */
+const WIRE_STALL_MS = 60000
+const STREAM_UNSEEN = Symbol('the answer stream was never seen to end')
 
 /**
  * True when a decoded response stream is not the whole turn: it ended
@@ -1410,7 +1415,7 @@ export class DomProvider extends Provider {
     // file-producing turn), the provider's otherwise.
     const cfg = { ...this.settings, responseTimeoutMs: ctx.responseTimeoutMs ?? this.settings.responseTimeoutMs }
 
-    if (ctx.wire && (await this.#awaitWire(ctx))) {
+    if (ctx.wire && (await this.#awaitWire(page, ctx))) {
       // A stream that closed without its finish marker while the page still
       // shows the turn generating is a turn that went on past its first
       // connection: ChatGPT runs its tools (the sandbox that writes a DOCX)
@@ -1605,11 +1610,16 @@ export class DomProvider extends Provider {
    * Returns true when a usable answer was decoded, false to let the DOM path
    * take over. A refusal from the site (a 4xx/5xx on the request) is thrown
    * here, because then no message was generated for anyone to read.
+   *
+   * The stream's end is raced against the page's: see #pageFinishedWithoutWire.
    */
-  async #awaitWire(ctx) {
+  async #awaitWire(page, ctx) {
     const cfg = { ...this.settings, responseTimeoutMs: ctx.responseTimeoutMs ?? this.settings.responseTimeoutMs }
     let lastProgress = ''
-    const res = await ctx.wire.finished(cfg.responseTimeoutMs, (partial) => {
+    const done = new AbortController()
+    const outer = currentSignal()
+    const scope = outer ? AbortSignal.any([outer, done.signal]) : done.signal
+    const wire = withCancellation(scope, () => ctx.wire.finished(cfg.responseTimeoutMs, (partial) => {
       // Decoding is only needed for a listener, or to stamp the first token.
       if (!partial?.body || (!ctx.onProgress && ctx.transportTiming?.first_token)) return
       const decoded = decodeDeltaStream(partial.body)
@@ -1619,7 +1629,27 @@ export class DomProvider extends Provider {
       ctx.transportTiming.first_token ??= Date.now()
       lastProgress = decoded.text
       ctx.onProgress?.(decoded.text)
-    })
+    }))
+    // Given up, the stream's wait is cancelled; nobody is left to hear it end.
+    wire.catch(() => {})
+    const stalled = this.#pageFinishedWithoutWire(page, ctx, done.signal)
+    let res
+    try {
+      res = await Promise.race([wire, stalled.then((finished) => (finished ? STREAM_UNSEEN : new Promise(() => {})))])
+    } finally {
+      done.abort()
+    }
+    if (res === STREAM_UNSEEN) {
+      const partial = ctx.wire.partial()
+      this.log?.warn(
+        `the page finished the turn ${Math.round((cfg.wireStallMs ?? WIRE_STALL_MS) / 1000)}s ago but its answer stream never reported an end ` +
+          `(${partial?.bytes ?? 0} bytes seen; a connection lost mid-turn?); reading the page instead`
+      )
+      ctx.wireStalled = true
+      const { sentAs, sentEffort } = await this.#sentModel(ctx)
+      ctx.wireProvenance = { sentAs, sentEffort, conversationId: null }
+      return false
+    }
     if (!res.ok && res.status && !(res.body && res.body.includes('data:'))) {
       let detail = res.body.slice(0, 300)
       try {
@@ -1637,17 +1667,7 @@ export class DomProvider extends Provider {
     const decoded = decodeDeltaStream(res.body)
     // What the UI put in its own request - the model field it chose from
     // the picker state. Independent of the answer and of the picker label.
-    let sentAs = null
-    let sentEffort = null
-    try {
-      const body = await ctx.wire.sentBody()
-      const j = body ? JSON.parse(body) : null
-      sentAs = j?.model ?? null
-      // Named by the provider contract, because the field is the site's own
-      // vocabulary (ChatGPT: thinking_effort = standard | extended).
-      const effortField = this.sel.wire.effortField
-      sentEffort = effortField && j ? j[effortField] ?? null : null
-    } catch {}
+    const { sentAs, sentEffort } = await this.#sentModel(ctx)
     ctx.wireResult = { res, decoded, sentAs, sentEffort }
     if (decoded.text) {
       if (res.error) this.log?.warn(`the response connection ended with "${res.error}"; the answer may be cut short`)
@@ -1657,6 +1677,66 @@ export class DomProvider extends Provider {
       `the wire carried no assistant text (${res.bytes} bytes, ${decoded.frames} frames` +
         `${res.error ? `, ${res.error}` : ''}); reading the page instead`
     )
+    return false
+  }
+
+  /**
+   * What the UI put in its own request - the model field it chose from the
+   * picker state, and the effort. Independent of the answer and of the
+   * picker label, and readable whether or not the answer's stream ended.
+   */
+  async #sentModel(ctx) {
+    try {
+      const body = await ctx.wire.sentBody()
+      const j = body ? JSON.parse(body) : null
+      // Named by the provider contract, because the field is the site's own
+      // vocabulary (ChatGPT: thinking_effort = standard | extended).
+      const effortField = this.sel.wire.effortField
+      return { sentAs: j?.model ?? null, sentEffort: effortField && j ? j[effortField] ?? null : null }
+    } catch {
+      return { sentAs: null, sentEffort: null }
+    }
+  }
+
+  /**
+   * True once the page has shown the turn finished for `wireStallMs` - a new
+   * answer block, no stop control, its text unchanged - while the answer's
+   * stream is still open; false when `stop` ends the watch first.
+   *
+   * MEASURED 2026-09-18 on c12's manuscript turn. The connection was lost
+   * while the answer's first stream was open: the page's own record shows
+   * that stream ending at 18:54:44 (318 s), then nothing until 19:05:42,
+   * when the site reconnected (`conversation/resume`, seven tries), finished
+   * the turn and fetched its six files by 19:07. The tap never saw the
+   * stream end - none of the four ways out of the stream wait logged - so a
+   * finished draft waited out the whole 2,700 s budget and was reported as a
+   * timeout. The stream's end is one sign that a turn is over; the page
+   * showing it over is another, and the page is where the answer is read
+   * from whenever the wire falls short. On a healthy turn the two end
+   * together, so the grace costs nothing there.
+   */
+  async #pageFinishedWithoutWire(page, ctx, stop) {
+    const s = this.sel
+    const grace = this.settings.wireStallMs ?? WIRE_STALL_MS
+    const poll = Math.max(5, Math.min(1000, grace / 4))
+    const prior = ctx.responseTextsBefore ?? []
+    const where = { blocks: s.responseBlocks, text: s.responseText }
+    let last = null
+    let quietSince = null
+    try {
+      while (!stop.aborted) {
+        const n = await count(page, s.responseBlocks)
+        const text = n ? await readRenderedText(page, where, n - 1) : ''
+        const fresh = !!text && (n > prior.length || text !== (prior[n - 1] ?? ''))
+        const settled = fresh && text === last && !(await isGenerating(page, s.stopButton))
+        quietSince = settled ? (quietSince ?? Date.now()) : null
+        if (quietSince !== null && Date.now() - quietSince >= grace) return true
+        last = text
+        await sleep(poll)
+      }
+    } catch {
+      // A page that cannot be read says nothing about the stream.
+    }
     return false
   }
 
@@ -1724,6 +1804,18 @@ export class DomProvider extends Provider {
 
     const { browsed, searched, sources } = await this.collectSources(page, ctx)
 
+    // THE MODEL THAT ANSWERED, off the page. An answer read here has no slug
+    // from the wire, and a strict session refused a complete answer for it:
+    // measured 2026-09-18, a 4,000-line answer whose connection was broken
+    // mid-stream was followed to its end on the page, then refused as
+    // model_unverified. The answer's own message carries the slug the site
+    // recorded for it (the attribute the thread export reads).
+    const slugAttr = s.thread?.export?.modelAttr
+    const blocks = page.locator(s.responseBlocks)
+    const modelSlug = slugAttr
+      ? await (ctx.index != null ? blocks.nth(ctx.index) : blocks.last()).getAttribute(slugAttr).catch(() => null)
+      : null
+
     return {
       text,
       // Which tier produced this, so a caller can judge the text rather than
@@ -1750,9 +1842,14 @@ export class DomProvider extends Provider {
       // The turn came out of the site's which-answer-do-you-prefer test and
       // how it was resolved. A label on the answer, not a change to it.
       ...(ctx.responseComparison ? { response_comparison: ctx.responseComparison } : {}),
+      // Read off the page after the wire fell short: the stream closed while
+      // the turn went on (`wire_continued`), or was never seen to end
+      // (`wire_stalled`, #pageFinishedWithoutWire). Labels, like the one above.
       ...(ctx.wireProvenance
-        ? { sent_as: ctx.wireProvenance.sentAs, sent_effort: ctx.wireProvenance.sentEffort, wire_continued: true }
+        ? { sent_as: ctx.wireProvenance.sentAs, sent_effort: ctx.wireProvenance.sentEffort,
+            ...(ctx.wireStalled ? { wire_stalled: true } : { wire_continued: true }) }
         : {}),
+      ...(modelSlug ? { model_slug: modelSlug, model_source: 'page' } : {}),
     }
   }
 

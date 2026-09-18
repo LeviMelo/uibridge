@@ -25,7 +25,7 @@ import { WireTap } from '../src/transports/wire.mjs'
 import { DomProvider } from '../src/providers/dom-provider.mjs'
 import { Pacer } from '../src/core/async.mjs'
 import { mergeReading, orderedMessages, contentKey, stitchRun, readingAgrees, sweepThread } from '../src/transports/thread-dom.mjs'
-import { captureDownload, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
+import { captureDownload, linksFromControls, parseSchemeLinks, filenameFromDisposition, safeFileName } from '../src/transports/files-wire.mjs'
 import { appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -802,20 +802,23 @@ const uploadSettings = (over = {}) => ({
   uploadTimeoutMs: 600000, uploadPerFileMs: 60000, uploadFloorMs: 180000, sendDuringUpload: true, ...over,
 })
 
-function composerPage(cdp, { onFiles, onClick } = {}) {
+function composerPage(cdp, { onFiles, onClick, nested = false } = {}) {
   const state = { composer: '', events: [], clicks: 0, chips: 0, body: '', ariaDisabled: null }
   let page
   const locator = (sel) => {
     const l = {
       first: () => l, nth: () => l, filter: () => l, page: () => page,
+      // a turn's inner text node, for the tests that read an answer off the page
+      ...(nested ? { last: () => l, locator: () => l } : {}),
       count: async () => (sel === '.chip' ? state.chips : 1),
       setInputFiles: async (paths) => { state.events.push('files'); await onFiles?.(paths, state) },
       fill: async (text) => { state.events.push('typing'); state.composer = text },
       evaluate: async (fn) => fn({ value: state.composer }),
-      getAttribute: async (name) => (name === 'aria-disabled' ? state.ariaDisabled : null),
+      getAttribute: async (name) => (name === 'aria-disabled' ? state.ariaDisabled : state.attrs?.[name] ?? null),
       click: async () => { state.events.push('click'); state.clicks++; onClick?.(state) },
       innerText: async () => state.body,
-      isVisible: async () => false,
+      // only a test that names a stop control ('#stop') can be generating
+      isVisible: async () => sel === '#stop' && !!state.generating,
     }
     return l
   }
@@ -840,6 +843,77 @@ async function answerArrives(cdp, text, { finish = true } = {}) {
   cdp.emit('Network.dataReceived', { requestId: 'conv', data: b64(body) })
   if (finish) cdp.emit('Network.loadingFinished', { requestId: 'conv' })
 }
+
+// A connection lost mid-turn (c12's manuscript, 2026-09-18): the page
+// reconnected and finished the turn, and the answer's stream was never seen
+// to end. The page is scripted to show the turn finished, or still going.
+class WiredPlain extends DomProvider {
+  static id = 'wired-plain'
+  static selectors = { composer: '#composer', sendButton: '#send', stopButton: '#stop',
+    wire: { answer: '/backend-api/(f/)?conversation$', effortField: 'thinking_effort' },
+    thread: { export: { modelAttr: 'data-message-model-slug' } } }
+}
+const answerStream = async (cdp) => ({
+  wire: (await WireTap.fromClient(cdp)).expect(/\/backend-api\/(f\/)?conversation$/),
+  responseTextsBefore: [''],
+})
+
+test('a stream never seen to end does not hold a turn the page has finished', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp, { nested: true })
+  const p = new WiredPlain({ settings: uploadSettings({ wireStallMs: 60 }) })
+  const ctx = await answerStream(cdp)
+  cdp.emit('Network.requestWillBeSent', { requestId: 'conv', request: {
+    url: 'https://chat.test/backend-api/f/conversation', method: 'POST',
+    postData: '{"model":"gpt-5-6-thinking","thinking_effort":"extended"}' } })
+  await answerArrives(cdp, 'the first part', { finish: false })
+  state.body = 'the whole answer'
+  const started = Date.now()
+  await p.awaitCompletion(page, ctx)
+  assert.ok(Date.now() - started < 3000, 'the grace ends the wait; the 5 s response timeout does not')
+  assert.equal(ctx.wireStalled, true)
+  assert.equal(ctx.wireResult ?? null, null, 'the answer is read off the page')
+  // and it carries what a strict session verifies: the slug the page records
+  // for the answer (a cut stream's answer was refused as model_unverified,
+  // 2026-09-18), and the model the page's own request asked for
+  state.attrs = { 'data-message-model-slug': 'gpt-5-6-thinking' }
+  const result = await p.extract(page, ctx)
+  assert.equal(result.text, 'the whole answer')
+  assert.equal(result.model_slug, 'gpt-5-6-thinking')
+  assert.equal(result.model_source, 'page')
+  assert.equal(result.wire_stalled, true)
+  assert.equal(result.wire_continued, undefined)
+  assert.equal(result.sent_as, 'gpt-5-6-thinking')
+  assert.equal(result.sent_effort, 'extended')
+})
+
+test('a turn still generating is never cut short for a quiet stream, and a stream that ends still wins', async () => {
+  const cdp = fakeCDP()
+  const { page, state } = composerPage(cdp, { nested: true })
+  const p = new WiredPlain({ settings: uploadSettings({ wireStallMs: 60 }) })
+  const ctx = await answerStream(cdp)
+  promptPosted(cdp)
+  await answerArrives(cdp, 'the answer', { finish: false })
+  state.body = 'the answer'
+  state.generating = true
+  const waiting = p.awaitCompletion(page, ctx)
+  const early = await Promise.race([waiting.then(() => 'returned'), new Promise((r) => setTimeout(() => r('waiting'), 400))])
+  assert.equal(early, 'waiting', 'a turn the page still shows generating is not over')
+  state.generating = false
+  cdp.emit('Network.loadingFinished', { requestId: 'conv' })
+  await waiting
+  assert.equal(ctx.wireStalled, undefined)
+  assert.equal(ctx.wireResult.decoded.text, 'the answer')
+})
+
+test('a turn read off the page names its files by its download controls', () => {
+  assert.deepEqual(linksFromControls(['manuscript_en.md', ' manuscript_pt-BR.pdf ', 'manuscript_en.md']), [
+    { label: 'manuscript_en.md', path: 'manuscript_en.md' },
+    { label: 'manuscript_pt-BR.pdf', path: 'manuscript_pt-BR.pdf' },
+  ])
+  assert.deepEqual(linksFromControls(['Copiar', 'see /mnt/data/x.csv', '', null]), [],
+    'a control that names no file is not a file')
+})
 
 test('send during upload: the prompt is typed and sent while the upload is still running', async () => {
   const cdp = fakeCDP()

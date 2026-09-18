@@ -31,7 +31,7 @@ import { DomProvider } from '../dom-provider.mjs'
 import { BridgeError } from '../../core/errors.mjs'
 import { waitFor } from '../../core/async.mjs'
 import { WireTap } from '../../transports/wire.mjs'
-import { captureDownload, parseSchemeLinks, previewProgressed } from '../../transports/files-wire.mjs'
+import { captureDownload, linksFromControls, parseSchemeLinks, previewProgressed } from '../../transports/files-wire.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -168,8 +168,20 @@ export default class ChatGPTProvider extends DomProvider {
   async generatedFiles(page, ctx, text) {
     const g = this.sel.generatedFile
     if (!g?.scheme) return []
-    const links = parseSchemeLinks(text, g.scheme)
-    if (!links.length) return []
+    let links = parseSchemeLinks(text, g.scheme)
+    // AN ANSWER READ OFF THE PAGE NAMES NO FILE. Its text is rebuilt from the
+    // rendered turn, which draws each link as a download button and keeps no
+    // link (see linksFromControls). The turn is complete by then, so its
+    // controls are read as they stand, and they name the files.
+    if (!links.length) {
+      if (ctx?.wireResult?.decoded?.text) return []
+      const drawn = await page.locator(this.sel.responseBlocks).last().locator(g.control)
+        .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label') ?? (e.textContent ?? '').trim()))
+        .catch(() => [])
+      links = linksFromControls(drawn)
+      if (!links.length) return []
+      this.log?.info(`${links.length} file(s) named by the turn's download controls (the answer was read off the page)`)
+    }
 
     const tap = await WireTap.attach(page)
     // Armed as early as possible: the page may fetch the file itself while

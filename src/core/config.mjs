@@ -117,6 +117,13 @@ const DEFAULTS = {
     // sitting for the full response timeout with a misleading message.
     submitAckMs: 60000,
     responseTimeoutMs: 600000,
+    // How long the page may show a turn finished (no stop control, its text
+    // unchanged) while the answer's stream has still not reported an end,
+    // before the stream is given up and the answer read off the page.
+    // Measured 2026-09-18: a connection lost mid-turn left the stream's end
+    // unseen, and a finished draft with six files waited out its whole
+    // 2,700 s budget and failed. On a healthy turn the two end together.
+    wireStallMs: 60000,
     // Ten PDFs in one prompt go through the app's own upload pipeline one
     // by one; on a slow link that is more than three minutes (2026-09-17:
     // eight of ten such batches timed out at 180 s). The wait is per file:
