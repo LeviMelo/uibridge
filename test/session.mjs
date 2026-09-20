@@ -44,7 +44,7 @@ class FakeProvider {
   async extract() {
     this.settings.observed.active--
     if (this.settings.failExtract) throw new Error('extraction failed')
-    return { text: 'answer', files: [], sources: [] }
+    return { text: 'answer', files: [], sources: [], ...(this.settings.answerAs ?? {}) }
   }
 }
 function fixture(t, overrides = {}) {
@@ -84,6 +84,54 @@ test('strict model mismatch fails before any prompt is submitted', async (t) => 
   const { session, observed } = fixture(t, { strictModel: true, modelVerdict: { verified: false, applied: 'other' } })
   await assert.rejects(session.ask({ prompt: 'test', model: 'wanted' }), { code: 'model_not_applied' })
   assert.equal(observed.prompt, undefined)
+})
+
+test('an effort the page never recorded is unverified, not a mismatch', async (t) => {
+  // The effort is read from the page's OWN request body, which a busy browser
+  // sometimes never gives us. Comparing that absence against "standard" threw
+  // away 5 of 67 calls on 2026-09-20, each after 90-170 s, while the picker
+  // had verified the model and the answer's slug matched.
+  const { session } = fixture(t, {
+    strictModel: true,
+    modelVerdict: { verified: true, expected_slug: 'gpt-5-6-thinking', expected_effort: 'standard' },
+    answerAs: { model_slug: 'gpt-5-6-thinking' },   // no sent_effort: not observed
+  })
+  const r = await session.ask({ prompt: 'test', model: 'chatgpt-5.6-medium' })
+  assert.equal(r.provenance.model.verified, true)
+  assert.equal(r.provenance.model.effort_verified, false, 'the ledger says it rests on the picker')
+  assert.match(r.provenance.model.note, /did not record which effort/)
+})
+
+test('an effort the page did record and that differs is still refused', async (t) => {
+  const { session } = fixture(t, {
+    strictModel: true,
+    modelVerdict: { verified: true, expected_slug: 'gpt-5-6-thinking', expected_effort: 'standard' },
+    answerAs: { model_slug: 'gpt-5-6-thinking', sent_effort: 'extended' },
+  })
+  await assert.rejects(session.ask({ prompt: 'test', model: 'chatgpt-5.6-medium' }),
+    { code: 'model_not_applied' })
+})
+
+test('an effort the page recorded and that agrees is fully verified', async (t) => {
+  const { session } = fixture(t, {
+    strictModel: true,
+    modelVerdict: { verified: true, expected_slug: 'gpt-5-6-thinking', expected_effort: 'standard' },
+    answerAs: { model_slug: 'gpt-5-6-thinking', sent_effort: 'standard' },
+  })
+  const r = await session.ask({ prompt: 'test', model: 'chatgpt-5.6-medium' })
+  assert.equal(r.provenance.model.verified, true)
+  assert.equal(r.provenance.model.effort_verified, undefined, 'nothing to flag')
+  assert.match(r.provenance.model.note, /the server confirms/)
+})
+
+test('a wrong slug is refused whatever the effort says', async (t) => {
+  const { session } = fixture(t, {
+    strictModel: true,
+    modelVerdict: { verified: true, expected_slug: 'gpt-5-6-thinking', expected_effort: 'standard' },
+    answerAs: { model_slug: 'gpt-4o', sent_effort: 'standard' },
+  })
+  await assert.rejects(session.ask({ prompt: 'test', model: 'chatgpt-5.6-medium' }),
+    { code: 'model_not_applied' })
 })
 
 test('a cancelled Session request cannot reach submission', async (t) => {

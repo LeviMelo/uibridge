@@ -485,12 +485,27 @@ export class Session {
           // both Média and Alta); the request's own effort field tells them
           // apart, so it is part of the verification when the model asks.
           const wantEffort = provenance.model.expected_effort
-          const effortOk = wantEffort === undefined || (wantEffort ?? null) === (result.sent_effort ?? null)
+          // ...but that field is read from the PAGE'S OWN request body, which
+          // a busy browser does not always give us (`#sentModel` returns null
+          // when the body was never captured). An effort we did not observe is
+          // NOT a different effort. Comparing null against "standard" threw
+          // away 5 of 67 calls on 2026-09-20 - 90 to 170 s each - while the
+          // picker had already verified the model and the answer's slug
+          // matched; the other 62 calls that day all carried the field and all
+          // agreed with it. An effort we DID observe and that differs is still
+          // a refusal, and the unverified ones say so in the ledger.
+          const effortSeen = result.sent_effort !== undefined && result.sent_effort !== null
+          const effortOk = wantEffort === undefined || !effortSeen || wantEffort === result.sent_effort
           const hit = slugOk && effortOk
+          const effortUnseen = wantEffort !== undefined && !effortSeen
           provenance.model.verified = hit
+          if (hit && effortUnseen) provenance.model.effort_verified = false
           const sentDesc = `${result.model_slug}${result.sent_effort ? ` at ${result.sent_effort} effort` : ''}`
           provenance.model.note = hit
-            ? `the server confirms ${sentDesc} answered`
+            ? effortUnseen
+              ? `the server confirms ${sentDesc} answered; the page did not record which ` +
+                `effort it asked for, so ${wantEffort} rests on the picker alone`
+              : `the server confirms ${sentDesc} answered`
             : `asked for ${model} but the page sent ${sentDesc}`
           if (!hit) log.warn(provenance.model.note)
           if (!hit && this.#settings.strictModel) {

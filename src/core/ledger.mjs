@@ -12,7 +12,10 @@ const safe = (s) => String(s).replace(/[^A-Za-z0-9_-]/g, '_')
 
 export function auditProvenance(provenance) {
   if (!provenance) return null
-  const setting = (value) => value && Object.fromEntries(['requested', 'applied', 'verified', 'note', 'expected_slug', 'expected_effort']
+  // `effort_verified: false` marks a turn whose model the answer's slug
+  // confirmed but whose effort the page never recorded, so the audit trail
+  // shows which turns rest on the picker alone.
+  const setting = (value) => value && Object.fromEntries(['requested', 'applied', 'verified', 'effort_verified', 'note', 'expected_slug', 'expected_effort']
     .filter((key) => value[key] !== undefined).map((key) => [key, value[key]]))
   return { model: setting(provenance.model), modes: Object.fromEntries(Object.entries(provenance.modes ?? {}).map(([key, value]) => [key, setting(value)])),
     ...Object.fromEntries(['final_state', 'answered_by', 'sent_as', 'sent_effort', 'history']
