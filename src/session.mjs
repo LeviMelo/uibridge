@@ -191,17 +191,48 @@ export class Session {
     const started = Date.now()
     const input = { characters: prompt.length, sha256: await textHash(prompt), transport: 'composer' }
     let temporaryDir = null
-    if (this.#settings.maxComposerChars && prompt.length > this.#settings.maxComposerChars) {
+
+    /**
+     * Fall back to carrying the request as a text attachment.
+     *
+     * **This is a last resort, not a size policy.** An attachment is an
+     * attachment: it spends one of the account's per-window uploads whether
+     * it holds a PDF or a pasted CSV, and a caller that batches text pays
+     * that per batch. A caller measured 89% of its screening batches and 97%
+     * of its text reads going this way, spending 65 uploads of an 80-upload
+     * window on text that the editor could have taken (PHAROS, 2026-09-20).
+     *
+     * The threshold that sent them here was set when typing was the only way
+     * into the composer and `fill()` cost about 0.1 s per LINE. It is not any
+     * more: `placeAsParagraphs` writes the whole prompt as ProseMirror nodes
+     * in one assignment - 342 lines in 0.6 s, measured 2026-09-18 - and
+     * `fillComposer` reads the composer back and refuses, retryably, if so
+     * much as the tail is missing. Truncation is therefore detected rather
+     * than risked, so the composer is simply tried first and this runs only
+     * when it actually failed.
+     */
+    const asAttachment = async () => {
+      if (input.transport === 'attachment') return
       temporaryDir = await mkdtemp(join(tmpdir(), 'uibridge-input-'))
       const path = join(temporaryDir, `uibridge-request-${rid}.txt`)
       try { await writeFile(path, prompt, 'utf8') } catch (err) {
         await rm(temporaryDir, { recursive: true, force: true })
+        temporaryDir = null
         throw err
       }
       resolved.push(path)
       input.transport = 'attachment'
       prompt = `The attached file uibridge-request-${rid}.txt contains the complete request, including labelled message history and output-format instructions. Read the entire file and answer that request, using any other attached evidence it refers to. Follow its output-format instructions exactly. Do not summarize the request or the file unless the request asks for a summary.`
-      log.info(`using a text attachment for ${input.characters} input characters (editor limit ${this.#settings.maxComposerChars})`)
+      log.info(`using a text attachment for ${input.characters} input characters`)
+    }
+
+    // The one size we do not bother trying: past this the editor is not a
+    // credible home for the text and a failed attempt costs a tab and a
+    // round trip. Everything below it goes to the composer first.
+    if (this.#settings.maxComposerChars && prompt.length > this.#settings.maxComposerChars) {
+      log.info(`${input.characters} characters is past maxComposerChars `
+        + `(${this.#settings.maxComposerChars}); attaching without trying the editor`)
+      await asAttachment()
     }
 
     // Retry only failures a second attempt can genuinely fix, and only once:
@@ -214,13 +245,26 @@ export class Session {
     // UI produced and we retrieved, so it is delivered with
     // `provider_error: true` and the caller decides. Each attempt gets a
     // fresh tab, because withTab discards a failed one.
+    //
+    // A `compose_failed` retry goes as an attachment, because repeating the
+    // attempt that just failed to place the text is the one retry that
+    // cannot help. `retry` hands the attempt index to its function, which is
+    // where the switch belongs: `onRetry` is not awaited.
     const RETRYABLE = new Set(['compose_failed', 'submit_failed'])
+    let composeFailed = false
     try { return await this.#inThread(threadId, () => retry(
-      () => this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started, input, responseTimeoutMs }),
+      async () => {
+        if (composeFailed) await asAttachment()
+        return this.#attempt({ prompt, files: resolved, model, modes, onProgress, threadId, rid, log, started, input, responseTimeoutMs })
+      },
       {
         attempts: 2,
         isRetryable: (e) => RETRYABLE.has(e.code),
-        onRetry: (e) => log.warn(`retrying once after ${e.code}`),
+        onRetry: (e) => {
+          if (e.code === 'compose_failed') composeFailed = true
+          log.warn(`retrying once after ${e.code}`
+            + (composeFailed ? ', this time as a text attachment' : ''))
+        },
       }
     )) } finally {
       if (temporaryDir) await rm(temporaryDir, { recursive: true, force: true }).catch((e) => log.warn(`could not remove temporary input: ${e.code}`))

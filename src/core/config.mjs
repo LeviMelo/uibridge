@@ -95,9 +95,18 @@ const DEFAULTS = {
   basePort: 9333,
   provider: {
     concurrency: 2,
-    // Large rich-text pastes can truncate (Gemini) or stall the editor.
-    // Carry the complete request in a temporary UTF-8 attachment instead.
-    maxComposerChars: 32000,
+    // The size past which the editor is not tried at all. NOT a policy about
+    // when to attach: the composer is tried first for anything below this and
+    // a `compose_failed` falls back to an attachment by itself (session.mjs).
+    //
+    // It was 32,000, from when `fill()` typed the prompt at ~0.1 s per line
+    // and a large paste could truncate or stall. `placeAsParagraphs` replaced
+    // that with a single ProseMirror write (342 lines in 0.6 s, 2026-09-18),
+    // and `fillComposer` reads the composer back and refuses retryably if any
+    // of the prompt is missing, so truncation is caught rather than risked.
+    // Leaving it at 32,000 cost a caller 65 of its 80 per-window uploads on
+    // text the editor would have taken (PHAROS, 2026-09-20).
+    maxComposerChars: 400000,
     // A fresh conversation per request: no shared context, and model choice
     // actually takes effect (switching mid-thread is unreliable).
     newChatPerRequest: true,

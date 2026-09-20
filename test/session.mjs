@@ -34,6 +34,12 @@ class FakeProvider {
   }
   async submit(page, prompt) {
     const o = this.settings.observed
+    if (this.settings.composeFailsOnce && !o.composeFailed) {
+      o.composeFailed = true
+      const e = new Error('The composer did not retain the complete prompt')
+      e.code = 'compose_failed'
+      throw e
+    }
     o.prompt = prompt
     o.active++
     o.maxActive = Math.max(o.maxActive, o.active)
@@ -134,6 +140,30 @@ test('a wrong slug is refused whatever the effort says', async (t) => {
     { code: 'model_not_applied' })
 })
 
+test('text goes to the composer, and an attachment is what failure falls back to', async (t) => {
+  // An attachment spends one of the account's per-window uploads whether it
+  // holds a PDF or a pasted CSV. A caller measured 89% of its screening
+  // batches and 97% of its text reads becoming attachments at the old
+  // 32,000-character threshold, spending 65 uploads of an 80-upload window
+  // on text the editor would have taken (PHAROS, 2026-09-20).
+  const { session, observed } = fixture(t, { maxComposerChars: 400000 })
+  const prompt = 'a line of evidence\n'.repeat(5000)      // ~95,000 characters
+  const r = await session.ask({ prompt })
+  assert.equal(r.input.transport, 'composer', 'the editor took it')
+  assert.equal(observed.prompt, prompt, 'all of it, unaltered')
+  assert.equal(observed.files, undefined, 'and nothing was uploaded')
+})
+
+test('a compose_failed retry goes as an attachment, not as the same attempt again', async (t) => {
+  // Repeating the attempt that just failed to place the text is the one
+  // retry that cannot help.
+  const { session, observed } = fixture(t, { maxComposerChars: 400000, composeFailsOnce: true })
+  const r = await session.ask({ prompt: 'Evidence '.repeat(4000) })
+  assert.equal(r.input.transport, 'attachment')
+  assert.equal(observed.fileText, 'Evidence '.repeat(4000), 'the whole request is in the file')
+  assert.match(observed.prompt, /contains the complete request/)
+})
+
 test('a cancelled Session request cannot reach submission', async (t) => {
   const { session, observed } = fixture(t)
   const controller = new AbortController()
@@ -197,7 +227,7 @@ test('explicit headed/headless overrides beat provider defaults', () => {
 test('the distributed example configuration is valid JSON and loads', () => {
   const cfg = loadConfig('config.example.json')
   assert.equal(cfg.provider.strictModel, true)
-  assert.equal(cfg.provider.maxComposerChars, 32000)
+  assert.equal(cfg.provider.maxComposerChars, 400000)
 })
 
 test('the observed Gemini non-answer is recognised without guessing new wording', () => {
