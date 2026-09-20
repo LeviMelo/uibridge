@@ -1,6 +1,6 @@
 {
   "name": "uibridge",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "A local OpenAI-compatible API backed by chat UI sessions in a real browser",
