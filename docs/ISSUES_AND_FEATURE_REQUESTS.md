@@ -1,5 +1,72 @@
 # Test Findings, Issues, and Feature Requests
 
+## 2026-09-21 — an answer that lost content was reported complete (0.5.1)
+
+Found by auditing this repository for a defect shape a caller had hit all
+night: **a verdict reached before the evidence, and a lesson applied where it
+was learned but not to the sibling that shares the hazard.** Both instances
+here are at the transport, which makes them the most expensive kind - the
+caller files uibridge's output as scientific data, so an answer that quietly
+lost content is worse than an error. An error retries; a short answer is
+indistinguishable, downstream, from the model having written less.
+
+**Fixed.**
+
+| path | what was lost | why nothing saw it |
+|---|---|---|
+| `stripMarkers` (`sse-openai.mjs`) | everything from an unterminated citation marker to the end of the answer | the branch is correct for a progress read of an **open** stream and the same branch runs on the final decode of a **closed** body |
+| `decodeDeltaStream` `malformed` | whole frames, i.e. content from the **middle** of an answer | counted since the decoder was written, asserted in a unit test, and read by no caller |
+
+Both left `finished` true, so `#extractWire` reported `truncated: false`.
+`truncated` now covers either, and the result carries `malformed_frames` and
+`dropped_characters`. The characters are still dropped in the marker case -
+half a sentinel must not escape into a CSV - but the count travels with them.
+
+The malformed case is worse than plain loss: a delta inherits `o` and `p` from
+the frame before it, so dropping one frame can mis-route the *next* frame's
+text. The module header already records what getting that inheritance wrong
+costs - "recovered 29 characters of a 2KB answer and looked like it had
+worked".
+
+**Open, from the same audit, in priority order.** Not addressed here.
+
+1. **A completed answer is destroyed by five throws before it is recorded**
+   (`session.mjs:476-597`). The answer exists at `:476`; the only durable
+   write is at `:587`; between them sit `thread_unidentified`,
+   `thread_mismatch`, `model_unverified` and `model_not_applied`, two of them
+   non-retryable, with `strictModel: true` the default. The turn was spent on
+   the user's subscription and a re-ask is a different generation. The repo
+   already records this shape costing 5 of 67 calls on 2026-09-20; the fix
+   applied then was to soften the comparison, not to record before judging.
+   `ledger.mjs` is already append-serialised and torn-line-tolerant, so a
+   provisional row at `:476` plus an outcome row is safe by construction.
+2. **The ledger is written on success only** (`session.mjs:586-597` is its
+   sole call site), so a failed request leaves no durable row at all and
+   `listThreads` reports successes as turns.
+3. **Chunk assembly has no ordering assertion** (`wire.mjs:132-159`):
+   `bufferedData` is appended after an `await` while the synchronous
+   `dataReceived` handler appends to the same array, and `content-length` is
+   captured and never compared. A reordered body yields malformed frames at
+   the seam and correctly-parsed frames applied in the wrong order. Unverified
+   against Chrome - a risk to test, not a confirmed defect.
+4. **A stale cached attachment allowance can refuse uploads for the daemon's
+   lifetime** (`chatgpt/index.mjs:92-129`): when `resets_after` is null or
+   unparseable the self-expiry guard never fires, and the refusal is issued
+   without attempting the upload.
+5. **`setMode` fails un-retryably where `selectModel` retries**
+   (`dom-provider.mjs:860-890` against `:781-799`), on the same popover
+   reached the same way, with the incident that justified the retry recorded
+   inline on the sibling only.
+6. **`waitStable` counts a failed read as evidence of stability**
+   (`async.mjs:54-67`) - the inverse of the rule written two files away in
+   `dom.mjs:52-69`. Latent: today's callers catch their own errors first.
+7. **No request-level tracing and no per-request id on the `[api]` failure
+   line**, so with `concurrency: 12` twelve interleaved failures cannot be
+   joined to the work that produced them. `captureComparison`
+   (`dom-provider.mjs:1595-1605`) is a working template for the artefact
+   capture the recurring failures lack.
+
+
 ## Patch assessment and verification
 
 The original findings below are preserved. The following changes address them:
