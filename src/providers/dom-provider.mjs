@@ -1914,7 +1914,19 @@ export class DomProvider extends Provider {
       conversation_id: decoded.conversationId,
       // A stream that ended without [DONE] was cut off, and the text is
       // whatever had arrived. Reported, never hidden.
-      truncated: !decoded.finished || !!res.error,
+      //
+      // **Two other ways to lose content were being counted and discarded.**
+      // `malformed` frames are content missing from the middle of an answer
+      // - and because the delta protocol inherits `o`/`p` from the previous
+      // frame, a dropped frame can also mis-route the next one's text. A
+      // non-zero `dropped` means an unterminated citation marker took the
+      // tail with it. Both left `finished` true, so a short answer arrived
+      // labelled complete - which for a caller filing it as scientific data
+      // is worse than an error, because nothing downstream can tell.
+      truncated: !decoded.finished || !!res.error
+        || decoded.malformed > 0 || decoded.dropped > 0,
+      malformed_frames: decoded.malformed,
+      dropped_characters: decoded.dropped,
     }
   }
 

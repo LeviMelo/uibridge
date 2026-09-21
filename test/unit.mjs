@@ -2366,3 +2366,39 @@ test('the reading is the account one: a later request provider instance sees it'
   await chatgptSeeing(open)
   assert.equal(next.allowance().blocked, false, 'a later reading replaces the block')
 })
+
+test('wire: an unterminated marker reports the characters it took', () => {
+  // The same branch serves the progress read of an open stream and the final
+  // decode of a closed body. On the closed body it silently discarded
+  // everything from the marker onward while `finished` stayed true, so a
+  // short answer was delivered as complete - which for a caller filing the
+  // text as scientific data is worse than an error, because nothing
+  // downstream can tell it happened.
+  const lost = 'and 40 of them relapsed within a year'
+  const { text, dropped } = stripMarkers('60 patients ' + PUA200 + 'cite' + lost)
+  assert.equal(text, '60 patients ')          // still dropped: half a sentinel must not escape
+  assert.ok(dropped > lost.length, 'the loss is counted, not merely incurred')
+
+  // a well-formed answer loses nothing and says so
+  const marker = PUA200 + 'cite' + PUA202 + 'turn0search1' + PUA201
+  assert.equal(stripMarkers('60 ' + marker + ' patients').dropped, 0)
+  assert.equal(stripMarkers('no markers at all').dropped, 0)
+})
+
+test('wire: a malformed frame is counted so the caller can see the hole', () => {
+  // A dropped frame on a complete body is content missing from the MIDDLE of
+  // the answer, and the delta protocol inherits o/p from the previous frame,
+  // so dropping one can mis-route the next one's text as well. It was counted
+  // and never read by any caller.
+  const body = [
+    'data: {"p":"","o":"add","c":0,"v":{"message":{"author":{"role":"assistant"},' +
+      '"content":{"content_type":"text","parts":["the trial enrolled "]}}}}',
+    'data: {"o":"append","p":"/message/content/parts/0","v":"200 patients',   // torn
+    'data: {"v":" and reported HADS"}',
+    'data: [DONE]',
+  ].join('\n')
+  const out = decodeDeltaStream(body)
+  assert.equal(out.finished, true, 'the body did end with [DONE]')
+  assert.ok(out.malformed > 0, 'the torn frame is counted')
+  assert.ok(!out.text.includes('200 patients'), 'and its content is genuinely absent')
+})

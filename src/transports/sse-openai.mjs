@@ -93,6 +93,9 @@ export function decodeDeltaStream(raw) {
     finished: false,
     frames: 0,
     malformed: 0,
+    // Characters lost to an unterminated citation marker on the final
+    // decode. Any non-zero value means the text is short (`stripMarkers`).
+    dropped: 0,
     // Everything the turn looked at, whether or not the answer cited it.
     sources: [],
     // Markers pointing at a source the stream never delivered.
@@ -195,8 +198,12 @@ export function decodeDeltaStream(raw) {
     // citation can still be tied to the point in the text it supports -
     // offsets into the RAW text would be wrong the moment anything is
     // stripped.
-    const { text, marks } = stripMarkers(best.text)
+    const { text, marks, dropped } = stripMarkers(best.text)
     out.text = text
+    // Characters an unterminated marker took with them. Zero on every
+    // well-formed answer; non-zero means the text is short by that much and
+    // the caller must not treat it as the whole answer.
+    out.dropped = dropped
 
     // SOURCES LIVE ON THE OTHER CHANNELS. The final text message carries
     // content_references that are routinely marked invalid with no URL, and
@@ -281,6 +288,7 @@ export function stripMarkers(raw) {
   const marks = []
   let text = ''
   let i = 0
+  let dropped = 0
   while (i < raw.length) {
     const start = raw.indexOf(LO, i)
     if (start === -1) {
@@ -289,8 +297,20 @@ export function stripMarkers(raw) {
     }
     let end = raw.indexOf(HI, start)
     if (end === -1) {
-      // An unterminated marker means the stream is still open mid-marker.
-      // Drop the tail rather than emitting half a sentinel.
+      // An unterminated marker usually means the stream is still open
+      // mid-marker, and dropping the tail is right for a progress read.
+      //
+      // **The same branch runs on the final decode of a closed body**, and
+      // there it silently discards everything from the marker onward while
+      // `finished` stays true - so a short answer is delivered as complete.
+      // For a caller filing that text as scientific data this is the worst
+      // failure available: not an error, not a retry, just less evidence
+      // than the model wrote, indistinguishable from the model having
+      // written less.
+      //
+      // The characters are still dropped, because half a sentinel must not
+      // escape into a CSV. What changes is that the count travels with them.
+      dropped += raw.length - start
       text += raw.slice(i, start)
       break
     }
@@ -299,7 +319,7 @@ export function stripMarkers(raw) {
     i = end + 1
   }
   // Any stray sentinel outside a well-formed span still has to go.
-  return { text: text.replace(PUA, ''), marks }
+  return { text: text.replace(PUA, ''), marks, dropped }
 }
 
 /** structuredClone is not available in every runtime this may run in. */
