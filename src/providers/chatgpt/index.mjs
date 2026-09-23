@@ -338,14 +338,21 @@ export default class ChatGPTProvider extends DomProvider {
     // a radio while the simple view is up is intercepted by that panel.
     if (!state.family || !familyRe.test(state.family)) {
       const pop = this.#popover(page)
-      await pop.locator(p.familyPanelToggle).first().click({ timeout: 8000 })
+      // through the rate notice, which intercepts bare clicks on this panel
+      // (measured 2026-09-23, now that instant is a family and needs it)
+      await this.clickThrough(pop.locator(p.familyPanelToggle).first(), { timeout: 8000, what: 'the model list' })
       const radio = pop.locator(p.familyOption).filter({ hasText: familyRe }).first()
       if (!(await radio.count().catch(() => 0))) {
         await page.keyboard.press('Escape').catch(() => {})
         await page.keyboard.press('Escape').catch(() => {})
         return { requested: modelId, applied: null, verified: false, note: `family "${spec.family}" not offered` }
       }
-      await radio.click({ timeout: 8000 })
+      // Focus and Enter, not a pointer click: the site's rate notice re-raises
+      // itself over the popover and takes pointer events, while the keyboard
+      // reaches the radio (measured 2026-09-23 on GPT-5.5 and GPT-5.6 Sol).
+      await this.dismissNotices(page).catch(() => [])
+      await radio.focus({ timeout: 8000 })
+      await page.keyboard.press('Enter')
       // Back to the slider panel: one Escape steps back a panel, and only a
       // second one closes the popover.
       await page.keyboard.press('Escape').catch(() => {})
@@ -366,9 +373,11 @@ export default class ChatGPTProvider extends DomProvider {
     // EFFORT: arrow keys on the slider, one step at a time, reading back
     // after each. A position that will not take (the locked "Pro" stop)
     // shows up as the value refusing to move, not as an exception.
+    // A model with no effort (Instantanea, since 2026-09-23 a family radio of
+    // its own) leaves the slider alone: its stops are the thinking model's.
     const slider = this.#popover(page).locator(p.slider).first()
-    await slider.focus()
-    for (let guard = 0; guard < 8 && state.effort !== spec.effort; guard++) {
+    if (spec.effort != null) await slider.focus()
+    for (let guard = 0; spec.effort != null && guard < 8 && state.effort !== spec.effort; guard++) {
       await page.keyboard.press(state.effort < spec.effort ? 'ArrowRight' : 'ArrowLeft')
       const before = state.effort
       state = await waitFor(
@@ -383,7 +392,7 @@ export default class ChatGPTProvider extends DomProvider {
     await page.keyboard.press('Escape').catch(() => {})
 
     const applied = `${state.family} / ${state.effortLabel} (effort ${state.effort})`
-    const ok = state.effort === spec.effort
+    const ok = spec.effort == null ? familyRe.test(state.family ?? '') : state.effort === spec.effort
     if (!ok) this.log?.warn(`asked for ${modelId} but the picker holds "${applied}" - recorded as unverified`)
     return {
       requested: modelId,

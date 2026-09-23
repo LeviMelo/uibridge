@@ -122,38 +122,38 @@
   },
   "models": {
     "chatgpt-5.6-instant": {
-      "family": "GPT-5[.]6",
-      "effort": 0,
+      "family": "^Instant",
+      "effort": null,
       "slug": "^gpt-5-6(-instant|-thinking)?$",
       "sentEffort": null
     },
     "chatgpt-5.6-medium": {
       "family": "GPT-5[.]6",
-      "effort": 1,
+      "effort": 0,
       "slug": "^gpt-5-6-thinking",
       "sentEffort": "standard"
     },
     "chatgpt-5.6-high": {
       "family": "GPT-5[.]6",
-      "effort": 2,
+      "effort": 1,
       "slug": "^gpt-5-6-thinking",
       "sentEffort": "extended"
     },
     "chatgpt-5.5-instant": {
-      "family": "GPT-5[.]5",
-      "effort": 0,
+      "family": "^Instant",
+      "effort": null,
       "slug": "^gpt-5-5(-instant|-thinking)?$",
       "sentEffort": null
     },
     "chatgpt-5.5-medium": {
       "family": "GPT-5[.]5",
-      "effort": 1,
+      "effort": 0,
       "slug": "^gpt-5-5-thinking",
       "sentEffort": "standard"
     },
     "chatgpt-5.5-high": {
       "family": "GPT-5[.]5",
-      "effort": 2,
+      "effort": 1,
       "slug": "^gpt-5-5-thinking",
       "sentEffort": "extended"
     }
@@ -162,13 +162,16 @@
     "family x effort, named the way the UI presents them (instant / medium /",
     "high). A request is VERIFIED when the wire's model_slug matches `slug`",
     "AND the request body's thinking_effort equals `sentEffort` (null = the",
-    "field is absent, which is what Instantânea sends).",
-    "VERIFIED LIVE 2026-09-06 on the 5.6 family: instant -> gpt-5-6 with no",
-    "effort field (auto-routes: a PDF question at this setting was answered by",
-    "gpt-5-6-thinking, so the instant slug pattern admits it); medium ->",
-    "gpt-5-6-thinking + standard; high -> gpt-5-6-thinking + extended. The 5.5",
-    "family is the same shape by construction of the picker; see git log for",
-    "its live check."
+    "field is absent, which is what Instantanea sends).",
+    "MEASURED LIVE 2026-09-23 (x/look-picker.mjs): the site moved Instantanea OFF",
+    "the effort slider. It is now a radio of its own in the advanced view, beside",
+    "'GPT-5.6 Sol' and 'GPT-5.5' (menuitemradio, aria-label 'Instantanea'), and",
+    "the slider runs 0 Media, 1 Alta, 2 Pro ('Media, 1 de 3'). So instant is a",
+    "`family` with `effort: null` (the slider is not touched), and medium/high",
+    "moved down one stop. Before this, every tier landed one stop too high:",
+    "'instant' sent gpt-5-6-thinking at standard and was refused as",
+    "model_not_applied. Whether the 5.5 family still has an instant is not",
+    "known; its entry uses the same radio and the wire check will say."
   ],
   "modes": {},
   "attachStrategy": "file-input",
@@ -256,26 +259,26 @@
   "accountMarker": "[data-testid='accounts-profile-button']",
   "comparisonText": "Qual resposta você prefere|Você está dando feedback sobre uma nova versão",
   "_comparison": [
-  "REPORTED 2026-09-17 by the user, read off the page verbatim:",
-  "  'Você está dando feedback sobre uma nova versão do ChatGPT.'",
-  "  'Qual resposta você prefere? Elas podem demorar um pouco para",
-  "   carregar.'",
-  "The site answers one turn with two candidates and asks which is",
-  "preferred. The turn is not committed until a choice is made, and",
-  "the composer refuses the next prompt while it is pending, so the",
-  "whole thread is wedged, not just this request.",
-  "",
-  "ONLY the Portuguese is listed because it is the ONLY locale anyone",
-  "has read off the page. Do not add an English pattern from memory -",
-  "see AGENTS.md on invented wording. Add one when you have seen it.",
-  "",
-  "NOT MEASURED: the controls that choose a response. Nobody has had",
-  "this state open with a DOM inspector, so this build does not click",
-  "one - it reloads the thread and reads back whether the chooser",
-  "cleared. When you next see it, `testdata/capture/comparison-*`",
-  "will hold the dump this build writes; measure the buttons there,",
-  "put them in this file, and click the first candidate instead, so",
-  "the answer is kept rather than left to the reload."
+    "REPORTED 2026-09-17 by the user, read off the page verbatim:",
+    "  'Você está dando feedback sobre uma nova versão do ChatGPT.'",
+    "  'Qual resposta você prefere? Elas podem demorar um pouco para",
+    "   carregar.'",
+    "The site answers one turn with two candidates and asks which is",
+    "preferred. The turn is not committed until a choice is made, and",
+    "the composer refuses the next prompt while it is pending, so the",
+    "whole thread is wedged, not just this request.",
+    "",
+    "ONLY the Portuguese is listed because it is the ONLY locale anyone",
+    "has read off the page. Do not add an English pattern from memory -",
+    "see AGENTS.md on invented wording. Add one when you have seen it.",
+    "",
+    "NOT MEASURED: the controls that choose a response. Nobody has had",
+    "this state open with a DOM inspector, so this build does not click",
+    "one - it reloads the thread and reads back whether the chooser",
+    "cleared. When you next see it, `testdata/capture/comparison-*`",
+    "will hold the dump this build writes; measure the buttons there,",
+    "put them in this file, and click the first candidate instead, so",
+    "the answer is kept rather than left to the reload."
   ],
   "challengeText": "unusual activity|verify you are human|not a robot|Just a moment",
   "picker": {
