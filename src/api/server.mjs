@@ -121,6 +121,29 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
     } finally { clearTimeout(timer); requests.delete(controller) }
   }
 
+  /**
+   * Open a session within `sessionOpenTimeoutMs`. Measured 2026-09-23: an
+   * attach in flight when the machine entered Modern Standby never settled,
+   * and every request after it waited on that one promise for good (the
+   * daemon answered /health with no session for 40 minutes). A timed-out
+   * open is dropped, so the next request tries afresh; if it lands late, it
+   * is closed. Nothing has been submitted at this point, so a retry is safe.
+   */
+  function boundedOpen(id) {
+    const ms = cfg.sessionOpenTimeoutMs ?? 90000
+    const attempt = Promise.resolve().then(() => openSession(id))
+    let timer
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        attempt.then((late) => late.close().catch(() => {}), () => {})
+        reject(new BridgeError(`Opening the ${id} session took over ${ms / 1000}s; no prompt was submitted`, {
+          status: 503, code: 'browser_unavailable', retryable: true,
+        }))
+      }, ms)
+    })
+    return Promise.race([attempt, timeout]).finally(() => clearTimeout(timer))
+  }
+
   /** One session per provider; concurrent first-hits must not race. */
   async function sessionFor(id) {
     if (stopping) throw new BridgeError('The service is stopping', { status: 503, code: 'shutting_down' })
@@ -137,8 +160,9 @@ export function createApp(cfg = loadConfig(), { openSession = (id) => Session.op
       opening.set(
         id,
         Promise.resolve().then(async () => {
-          if (stale) await stale.close().catch(() => {})
-          return openSession(id)
+          // a session whose browser died can hang in close() as well
+          if (stale) await Promise.race([stale.close().catch(() => {}), new Promise((r) => setTimeout(r, 10000))])
+          return boundedOpen(id)
         })
           .then(async (s) => {
             if (stopping) {

@@ -209,3 +209,23 @@ test('a request may declare its own response budget, within the configured ceili
   }
   assert.equal(seen.length, 2, 'a refused budget never reaches the session')
 })
+
+test('an open that never settles is dropped, and the next request opens afresh', async (t) => {
+  let opens = 0
+  const app = createApp({ defaultProvider: 'gemini', sessionOpenTimeoutMs: 100 }, { openSession: async () => {
+    opens++
+    if (opens === 1) return new Promise(() => {})       // the attach a standby froze
+    return { ask: async () => result('fresh'), close: async () => {} }
+  } })
+  await new Promise((r) => app.server.listen(0, '127.0.0.1', r))
+  t.after(() => app.close())
+  const post = () => fetch(`http://127.0.0.1:${app.server.address().port}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(request),
+  })
+  const first = await post()
+  assert.equal(first.status, 503)
+  assert.equal((await first.json()).error.type, 'browser_unavailable')
+  const second = await post()
+  assert.equal(second.status, 200)
+  assert.equal(opens, 2)
+})
