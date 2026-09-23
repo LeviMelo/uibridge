@@ -85,7 +85,7 @@ async function readBody(req, limitBytes = 64 * 1024 * 1024) {
   }
 }
 
-export function createApp(cfg = loadConfig(), { openSession = (id) => Session.open(id, { cfg }) } = {}) {
+export function createApp(cfg = loadConfig(), { openSession = (id) => Session.open(id, { cfg, owner: true }) } = {}) {
   const sessions = new Map()
   const opening = new Map()
   const requests = new Set()

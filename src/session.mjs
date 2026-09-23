@@ -53,7 +53,7 @@ export class Session {
     this.#continuationPacer = new Pacer(settings.continuationIntervalMs ?? 0)
   }
 
-  static async open(id, { cfg = loadConfig(), headless } = {}) {
+  static async open(id, { cfg = loadConfig(), headless, owner = false } = {}) {
     const Class = providerClass(id)
     if (!Class) throw new RequestError(`Unknown provider "${id}". Known: ${providerIds.join(', ')}`)
 
@@ -89,6 +89,9 @@ export class Session {
       // Some providers expose their original markdown only through the
       // message Copy button, which needs clipboard permission.
       clipboardOrigins: [new URL(url).origin],
+      // only the daemon owns the browser; a CLI command beside it must not
+      // close the daemon's tabs
+      closeStale: owner,
     })
 
     const provider = new Class({ selectors: Class.selectors, settings: { ...settings, url }, log })

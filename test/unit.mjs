@@ -2402,3 +2402,24 @@ test('wire: a malformed frame is counted so the caller can see the hole', () => 
   assert.ok(out.malformed > 0, 'the torn frame is counted')
   assert.ok(!out.text.includes('200 patients'), 'and its content is genuinely absent')
 })
+
+test('a daemon closes the tabs a previous one left, through the HTTP endpoints', async (t) => {
+  const { createServer } = await import('node:http')
+  const { closeStaleTargets } = await import('../src/core/chrome.mjs')
+  const targets = [
+    { id: 'a', type: 'page' }, { id: 'b', type: 'page' }, { id: 'c', type: 'page' },
+    { id: 'ui', type: 'browser_ui' },
+  ]
+  const closed = []
+  const server = createServer((req, res) => {
+    if (req.url === '/json/list') return res.end(JSON.stringify(targets))
+    const m = req.url.match(/^\/json\/close\/(\w+)$/)
+    if (m) { closed.push(m[1]); return res.end('Target is closing') }
+    res.statusCode = 404; res.end()
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  t.after(() => server.close())
+  const n = await closeStaleTargets(server.address().port)
+  assert.equal(n, 2)
+  assert.deepEqual(closed, ['b', 'c'], 'one page kept for the window; non-pages untouched')
+})

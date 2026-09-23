@@ -127,9 +127,35 @@ export async function connectBrowser(port, { connect = (url, options) => chromiu
   }
 }
 
-export async function attachBrowser({ port, userDataDir, headless = false, clipboardOrigins = [] }) {
+/**
+ * Close the page targets a previous daemon left open, keeping one so the
+ * window stays. Through Chrome's HTTP endpoints, so it works when a
+ * Playwright attach would not: measured 2026-09-23, 36 orphaned tabs from
+ * four daemon restarts made connectOverCDP exceed its timeout on every
+ * request while /json/version still answered. Returns how many were closed.
+ */
+export async function closeStaleTargets(port, { keep = 1 } = {}) {
+  const base = `http://127.0.0.1:${port}/json`
+  const list = await fetch(`${base}/list`).then((r) => r.json()).catch(() => [])
+  const pages = list.filter((t) => t.type === 'page')
+  let closed = 0
+  for (const t of pages.slice(keep)) {
+    const ok = await fetch(`${base}/close/${t.id}`).then((r) => r.ok).catch(() => false)
+      || await fetch(`${base}/close/${t.id}`, { method: 'PUT' }).then((r) => r.ok).catch(() => false)
+    if (ok) closed++
+  }
+  return closed
+}
+
+export async function attachBrowser({ port, userDataDir, headless = false, clipboardOrigins = [], closeStale = false }) {
   const fresh = !(await debuggerUp(port))
   if (fresh) await launch(port, userDataDir, headless)
+  // A daemon owns its provider's browser: tabs already open when it attaches
+  // belong to a daemon that is gone. Other tools attaching leave them alone.
+  if (!fresh && closeStale) {
+    const closed = await closeStaleTargets(port)
+    if (closed) log.info(`closed ${closed} tab(s) a previous session left on ${port}`)
+  }
 
   const browser = await connectBrowser(port)
   const ctx = browser.contexts()[0] ?? (await browser.newContext())
