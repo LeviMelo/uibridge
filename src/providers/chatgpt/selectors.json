@@ -122,56 +122,56 @@
   },
   "models": {
     "chatgpt-5.6-instant": {
-      "family": "^Instant",
-      "effort": null,
+      "family": "GPT-5[.]6",
+      "stop": 0,
+      "aloneFamily": "^Instant",
       "slug": "^gpt-5-6(-instant|-thinking)?$",
       "sentEffort": null
     },
     "chatgpt-5.6-medium": {
       "family": "GPT-5[.]6",
-      "effort": 0,
+      "stop": 1,
       "slug": "^gpt-5-6-thinking",
       "sentEffort": "standard"
     },
     "chatgpt-5.6-high": {
       "family": "GPT-5[.]6",
-      "effort": 1,
+      "stop": 2,
       "slug": "^gpt-5-6-thinking",
       "sentEffort": "extended"
     },
     "chatgpt-5.5-instant": {
-      "family": "^Instant",
-      "effort": null,
+      "family": "GPT-5[.]5",
+      "stop": 0,
+      "aloneFamily": "^Instant",
       "slug": "^gpt-5-5(-instant|-thinking)?$",
       "sentEffort": null
     },
     "chatgpt-5.5-medium": {
       "family": "GPT-5[.]5",
-      "effort": 0,
+      "stop": 1,
       "slug": "^gpt-5-5-thinking",
       "sentEffort": "standard"
     },
     "chatgpt-5.5-high": {
       "family": "GPT-5[.]5",
-      "effort": 1,
+      "stop": 2,
       "slug": "^gpt-5-5-thinking",
       "sentEffort": "extended"
     }
   },
   "_models": [
-    "family x effort, named the way the UI presents them (instant / medium /",
-    "high). A request is VERIFIED when the wire's model_slug matches `slug`",
-    "AND the request body's thinking_effort equals `sentEffort` (null = the",
-    "field is absent, which is what Instantanea sends).",
-    "MEASURED LIVE 2026-09-23 (x/look-picker.mjs): the site moved Instantanea OFF",
-    "the effort slider. It is now a radio of its own in the advanced view, beside",
-    "'GPT-5.6 Sol' and 'GPT-5.5' (menuitemradio, aria-label 'Instantanea'), and",
-    "the slider runs 0 Media, 1 Alta, 2 Pro ('Media, 1 de 3'). So instant is a",
-    "`family` with `effort: null` (the slider is not touched), and medium/high",
-    "moved down one stop. Before this, every tier landed one stop too high:",
-    "'instant' sent gpt-5-6-thinking at standard and was refused as",
-    "model_not_applied. Whether the 5.5 family still has an instant is not",
-    "known; its entry uses the same radio and the wire check will say."
+    "family x stop, named the way the UI presents them (instant / medium / high).",
+    "A tier is a slider STOP found by its NAME (picker.stops, by rank): the site",
+    "alternates between two layouts, both measured live 2026-09-23 (x/look-picker.mjs):",
+    "a slider 'Instantanea, 1 de 4' of Instantanea/Media/Alta/Pro, and a slider",
+    "'Media, 1 de 3' of Media/Alta/Pro with Instantanea as a family radio of its own.",
+    "An index right in one layout is a stop off in the other, which sent every",
+    "medium request as instant (gpt-5-6) for hours. `aloneFamily` is the radio a",
+    "tier falls back to when the slider has no stop of its name.",
+    "A request is VERIFIED when the wire's model_slug matches `slug` AND the",
+    "request body's thinking_effort equals `sentEffort` (null = the field is absent,",
+    "which is what Instantanea sends)."
   ],
   "modes": {},
   "attachStrategy": "file-input",
@@ -289,7 +289,13 @@
     "familyOption": "[role='menuitemradio']",
     "familyPanelToggle": "[role='menuitem'][aria-label='Selecionar modelo']",
     "familyPanel": "[data-testid='composer-model-picker-slider-advanced-view']",
-    "effortPanel": "[data-testid='composer-model-picker-slider-simple-view']"
+    "effortPanel": "[data-testid='composer-model-picker-slider-simple-view']",
+    "stops": [
+      "^Instant",
+      "^(M[ée]dia|Medium|Padr[ãa]o|Standard)",
+      "^(Alta|High|Estendid|Extended)",
+      "^Pro"
+    ]
   },
   "_picker": [
     "MEASURED 2026-09-06. The composer pill (its text is the current effort,",

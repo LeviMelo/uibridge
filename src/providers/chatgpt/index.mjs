@@ -298,9 +298,12 @@ export default class ChatGPTProvider extends DomProvider {
         const slider = root.querySelector(p.slider)
         const checked = [...root.querySelectorAll(p.familyOption)].find((e) => e.getAttribute('aria-checked') === 'true')
         const label = root.querySelector(p.effortLabel)
+        // the simple view names the slider's stop: "Instantânea, 1 de 4."
+        const panel = root.querySelector(p.effortPanel)
+        const stop = panel ? (panel.innerText || '').split(/[,\n]/)[0].trim() : null
         return {
           effort: slider ? Number(slider.getAttribute('aria-valuenow')) : null,
-          effortLabel: label ? (label.innerText || '').trim() : null,
+          effortLabel: stop || (label ? (label.innerText || '').trim() : null),
           family: checked ? (checked.innerText || '').trim() : null,
         }
       },
@@ -320,79 +323,91 @@ export default class ChatGPTProvider extends DomProvider {
     }
   }
 
+  /** Choose the family radio matching `familyRe`; the state after, or null. */
+  async #chooseFamily(page, familyRe) {
+    const p = this.sel.picker
+    // The radios live on a SECOND PANEL of the popover: the "simple view"
+    // holds the slider, the "advanced view" the family list, and the row
+    // labelled "Selecionar modelo" flips between them. Through the rate
+    // notice, which intercepts bare clicks on this panel.
+    const pop = this.#popover(page)
+    await this.clickThrough(pop.locator(p.familyPanelToggle).first(), { timeout: 8000, what: 'the model list' })
+    const radio = pop.locator(p.familyOption).filter({ hasText: familyRe }).first()
+    if (!(await radio.count().catch(() => 0))) {
+      await page.keyboard.press('Escape').catch(() => {})
+      await this.#openPicker(page)
+      return null
+    }
+    // Focus and Enter, not a pointer click: the rate notice re-raises itself
+    // over the popover and takes pointer events; the keyboard reaches the radio.
+    await this.dismissNotices(page).catch(() => [])
+    await radio.focus({ timeout: 8000 })
+    await page.keyboard.press('Enter')
+    // one Escape steps back a panel; only a second closes the popover
+    await page.keyboard.press('Escape').catch(() => {})
+    await this.#openPicker(page)
+    return waitFor(
+      async () => {
+        const s = await this.#readPicker(page)
+        return s.family && familyRe.test(s.family) ? s : null
+      },
+      { timeout: 8000, poll: this.settings.pollMs, what: `the family radio to read back as ${familyRe}` }
+    ).catch(() => null)
+  }
+
   async selectModel(page, modelId) {
     const spec = this.sel.models?.[modelId]
     if (!spec) return { requested: modelId, applied: null, verified: false, note: 'unknown model' }
     const p = this.sel.picker
     const familyRe = new RegExp(spec.family)
+    // A tier is a slider STOP, found by its name, never by its index: the site
+    // alternates between a slider of Instantânea/Média/Alta/Pro and one of
+    // Média/Alta/Pro with Instantânea as a family radio (both seen 2026-09-23),
+    // and an index right in one layout is one stop off in the other.
+    const stops = p.stops.map((s) => new RegExp(s, 'i'))
+    const want = stops[spec.stop]
+    const rank = (name) => stops.findIndex((re) => re.test(name ?? ''))
+    const aloneRe = spec.aloneFamily ? new RegExp(spec.aloneFamily) : null
 
     await this.#openPicker(page)
     let state = await this.#readPicker(page)
 
-    // FAMILY first: choosing it can reset the popover, so the effort is set
-    // afterwards, against whatever the family's slider shows.
-    //
-    // The radios live on a SECOND PANEL of the same popover (measured: the
-    // "simple view" holds the slider, the "advanced view" the family list,
-    // and the row labelled "Selecionar modelo" flips between them). Clicking
-    // a radio while the simple view is up is intercepted by that panel.
-    if (!state.family || !familyRe.test(state.family)) {
-      const pop = this.#popover(page)
-      // through the rate notice, which intercepts bare clicks on this panel
-      // (measured 2026-09-23, now that instant is a family and needs it)
-      await this.clickThrough(pop.locator(p.familyPanelToggle).first(), { timeout: 8000, what: 'the model list' })
-      const radio = pop.locator(p.familyOption).filter({ hasText: familyRe }).first()
-      if (!(await radio.count().catch(() => 0))) {
-        await page.keyboard.press('Escape').catch(() => {})
+    if (!(aloneRe && aloneRe.test(state.family ?? '')) && !familyRe.test(state.family ?? '')) {
+      state = await this.#chooseFamily(page, familyRe)
+      if (!state) {
         await page.keyboard.press('Escape').catch(() => {})
         return { requested: modelId, applied: null, verified: false, note: `family "${spec.family}" not offered` }
       }
-      // Focus and Enter, not a pointer click: the site's rate notice re-raises
-      // itself over the popover and takes pointer events, while the keyboard
-      // reaches the radio (measured 2026-09-23 on GPT-5.5 and GPT-5.6 Sol).
-      await this.dismissNotices(page).catch(() => [])
-      await radio.focus({ timeout: 8000 })
-      await page.keyboard.press('Enter')
-      // Back to the slider panel: one Escape steps back a panel, and only a
-      // second one closes the popover.
-      await page.keyboard.press('Escape').catch(() => {})
-      await this.#openPicker(page)
-      state = await waitFor(
-        async () => {
-          const s = await this.#readPicker(page)
-          return s.family && familyRe.test(s.family) ? s : null
-        },
-        { timeout: 8000, poll: this.settings.pollMs, what: `the family radio to read back as ${spec.family}` }
-      ).catch(() => null)
-      if (!state) {
-        await page.keyboard.press('Escape').catch(() => {})
-        return { requested: modelId, applied: null, verified: false, note: 'family switch not reflected in the UI' }
-      }
     }
 
-    // EFFORT: arrow keys on the slider, one step at a time, reading back
-    // after each. A position that will not take (the locked "Pro" stop)
-    // shows up as the value refusing to move, not as an exception.
-    // A model with no effort (Instantanea, since 2026-09-23 a family radio of
-    // its own) leaves the slider alone: its stops are the thinking model's.
-    const slider = this.#popover(page).locator(p.slider).first()
-    if (spec.effort != null) await slider.focus()
-    for (let guard = 0; spec.effort != null && guard < 8 && state.effort !== spec.effort; guard++) {
-      await page.keyboard.press(state.effort < spec.effort ? 'ArrowRight' : 'ArrowLeft')
-      const before = state.effort
-      state = await waitFor(
-        async () => {
-          const s = await this.#readPicker(page)
-          return s.effort !== before ? s : null
-        },
-        { timeout: 2000, poll: this.settings.pollMs, what: 'the effort slider to move' }
-      ).catch(() => state)
-      if (state.effort === before) break
+    // the stop: arrow keys one step at a time, reading back after each; a stop
+    // that will not take (a locked "Pro") shows as the slider refusing to move
+    if (!(aloneRe && aloneRe.test(state.family ?? ''))) {
+      const slider = this.#popover(page).locator(p.slider).first()
+      await slider.focus().catch(() => {})
+      for (let guard = 0; guard < 8 && !want.test(state.effortLabel ?? ''); guard++) {
+        const at = rank(state.effortLabel)
+        const right = at < 0 ? state.effort < spec.stop : at < spec.stop
+        await page.keyboard.press(right ? 'ArrowRight' : 'ArrowLeft')
+        const before = state.effort
+        state = await waitFor(
+          async () => {
+            const s = await this.#readPicker(page)
+            return s.effort !== before ? s : null
+          },
+          { timeout: 2000, poll: this.settings.pollMs, what: 'the effort slider to move' }
+        ).catch(() => state)
+        if (state.effort === before) break
+      }
+      // no such stop on this slider: the tier is a family of its own
+      if (!want.test(state.effortLabel ?? '') && aloneRe) {
+        state = (await this.#chooseFamily(page, aloneRe)) ?? state
+      }
     }
     await page.keyboard.press('Escape').catch(() => {})
 
     const applied = `${state.family} / ${state.effortLabel} (effort ${state.effort})`
-    const ok = spec.effort == null ? familyRe.test(state.family ?? '') : state.effort === spec.effort
+    const ok = want.test(state.effortLabel ?? '') || Boolean(aloneRe?.test(state.family ?? ''))
     if (!ok) this.log?.warn(`asked for ${modelId} but the picker holds "${applied}" - recorded as unverified`)
     return {
       requested: modelId,
