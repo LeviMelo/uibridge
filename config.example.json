@@ -63,7 +63,7 @@
     "newChatPerRequest": true,
     "_newChatPerRequest": "A fresh conversation per request: no shared context, and the model choice actually applies (switching mid-thread is unreliable). Pass thread_id to continue instead.",
 
-    "maxComposerChars": 400000,
+    "maxComposerChars": 190000,
     "_maxComposerChars": "The size past which the editor is not tried at all. Not a policy about when to attach: anything below this goes to the composer first, and a compose_failed falls back to a temporary UTF-8 attachment by itself. An attachment spends one of the account's per-window uploads, so text that the editor can take should never become one.",
 
     "readyTimeoutMs": 60000,

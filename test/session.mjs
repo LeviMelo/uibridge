@@ -227,7 +227,7 @@ test('explicit headed/headless overrides beat provider defaults', () => {
 test('the distributed example configuration is valid JSON and loads', () => {
   const cfg = loadConfig('config.example.json')
   assert.equal(cfg.provider.strictModel, true)
-  assert.equal(cfg.provider.maxComposerChars, 400000)
+  assert.equal(cfg.provider.maxComposerChars, 190000)
 })
 
 test('the observed Gemini non-answer is recognised without guessing new wording', () => {

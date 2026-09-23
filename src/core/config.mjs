@@ -105,8 +105,11 @@ const DEFAULTS = {
     // and `fillComposer` reads the composer back and refuses retryably if any
     // of the prompt is missing, so truncation is caught rather than risked.
     // Leaving it at 32,000 cost a caller 65 of its 80 per-window uploads on
-    // text the editor would have taken (PHAROS, 2026-09-20).
-    maxComposerChars: 400000,
+    // text the editor would have taken (PHAROS, 2026-09-20). On 2026-09-23
+    // ChatGPT took 192 KB in one message and refused 204 KB and more with
+    // HTTP 413 ("As mensagens enviadas eram longas demais"); it had taken
+    // 400,000 on 09-20.
+    maxComposerChars: 190000,
     // A fresh conversation per request: no shared context, and model choice
     // actually takes effect (switching mid-thread is unreliable).
     newChatPerRequest: true,
