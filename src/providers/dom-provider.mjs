@@ -42,6 +42,9 @@ import { UploadWatch, refusedUploads, uploadRefused } from '../transports/upload
 
 /** The default `wireStallMs` (see config.mjs), and what its expiry yields. */
 const WIRE_STALL_MS = 60000
+// A text-only prompt's send button is disabled only while the editor takes
+// the paste (0.6 s for 342 lines, 2026-09-18); past this it is refusing it.
+const TEXT_SEND_SETTLE_MS = 10000
 const STREAM_UNSEEN = Symbol('the answer stream was never seen to end')
 
 /**
@@ -1200,9 +1203,23 @@ export class DomProvider extends Provider {
       await waitFor(
         async () => (flight?.refused() || flight?.expired() ||
           (await send.getAttribute('aria-disabled').catch(() => null)) !== 'true' ? true : null),
-        { timeout: this.settings.uploadTimeoutMs ?? 30000, poll: this.settings.pollMs, what: 'the send button to be enabled' }
+        { timeout: flight ? (this.settings.uploadTimeoutMs ?? 30000) : TEXT_SEND_SETTLE_MS,
+          poll: this.settings.pollMs, what: 'the send button to be enabled' }
       ).catch(() => {})
       refusedBeforeSend()
+      // With no file to wait for, a send button that stays disabled over a
+      // typed prompt is the site refusing the prompt itself: ChatGPT does this
+      // for one message past its model's size (2026-09-23: Instantânea took
+      // 57,685 tokens and refused 64,000; hover "a mensagem é muito longa").
+      // Clicking it waited out two upload timeouts and ended submit_failed;
+      // compose_failed sends the prompt as an attachment instead (session.mjs).
+      if (!flight && (await send.getAttribute('aria-disabled').catch(() => null)) === 'true') {
+        throw new BridgeError(
+          `${this.id}: the site keeps the send button disabled over this ${prompt.length}-character ` +
+            'prompt (longer than one message may be); sending it as an attachment',
+          { status: 502, code: 'compose_failed', retryable: true,
+            detail: { reason: 'send_disabled', chars: prompt.length } })
+      }
       if (flight?.expired()) throw this.#uploadsStalled(flight)
       // Through any blocking notice: the rate-limit modal covers the
       // composer too, and a swallowed send presents as "no turn appeared".
